@@ -1,0 +1,19 @@
+# CMake build directories
+/build/
+/build-*/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Generated binaries and intermediate files
+out/
+Debug/
+Release/
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
