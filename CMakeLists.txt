@@ -57,3 +57,5 @@ endif()
 set_target_properties(doom_opengl PROPERTIES
 	VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+
+set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT doom_opengl)

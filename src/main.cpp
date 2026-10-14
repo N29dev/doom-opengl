@@ -6,38 +6,286 @@
 #include <string>
 
 namespace {
-struct Vec3 { float x, y, z; };
-Vec3 operator+(Vec3 a, Vec3 b) { return {a.x+b.x,a.y+b.y,a.z+b.z}; }
-Vec3 operator-(Vec3 a, Vec3 b) { return {a.x-b.x,a.y-b.y,a.z-b.z}; }
-Vec3 operator*(Vec3 a, float s) { return {a.x*s,a.y*s,a.z*s}; }
-float dot(Vec3 a, Vec3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
-Vec3 cross(Vec3 a, Vec3 b) { return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x}; }
-Vec3 normalize(Vec3 a) { float l=std::sqrt(dot(a,a)); return l>0 ? a*(1.0F/l) : Vec3{0,0,0}; }
-struct Mat4 { float v[16]{}; };
-Mat4 identity() { Mat4 r{}; r.v[0]=r.v[5]=r.v[10]=r.v[15]=1; return r; }
-Mat4 operator*(const Mat4& a,const Mat4& b) { Mat4 r{}; for(int c=0;c<4;c++) for(int y=0;y<4;y++) for(int k=0;k<4;k++) r.v[c*4+y]+=a.v[k*4+y]*b.v[c*4+k]; return r; }
-Mat4 model_matrix(Vec3 p, Vec3 s) { Mat4 r=identity(); r.v[0]=s.x;r.v[5]=s.y;r.v[10]=s.z;r.v[12]=p.x;r.v[13]=p.y;r.v[14]=p.z; return r; }
-Mat4 perspective(float fov,float aspect,float near_plane,float far_plane) { float t=std::tan(fov/2);Mat4 r{};r.v[0]=1/(aspect*t);r.v[5]=1/t;r.v[10]=-(far_plane+near_plane)/(far_plane-near_plane);r.v[11]=-1;r.v[14]=-2*far_plane*near_plane/(far_plane-near_plane);return r; }
-Mat4 view_matrix(Vec3 eye,Vec3 target) { Vec3 f=normalize(target-eye),r=normalize(cross(f,{0,1,0})),u=cross(r,f);Mat4 m=identity();m.v[0]=r.x;m.v[4]=r.y;m.v[8]=r.z;m.v[1]=u.x;m.v[5]=u.y;m.v[9]=u.z;m.v[2]=-f.x;m.v[6]=-f.y;m.v[10]=-f.z;m.v[12]=-dot(r,eye);m.v[13]=-dot(u,eye);m.v[14]=dot(f,eye);return m; }
-struct Camera { Vec3 position{0,1.4F,6}; float yaw=-90,pitch=0; Vec3 front() const { float y=yaw*3.14159265F/180,p=pitch*3.14159265F/180;return normalize({std::cos(y)*std::cos(p),std::sin(p),std::sin(y)*std::cos(p)}); } } camera;
-bool first_mouse=true; double mouse_x=640,mouse_y=360;
-void mouse_callback(GLFWwindow*,double x,double y) { if(first_mouse){mouse_x=x;mouse_y=y;first_mouse=false;} camera.yaw+=float(x-mouse_x)*.1F;camera.pitch=std::clamp(camera.pitch+float(mouse_y-y)*.1F,-88.0F,88.0F);mouse_x=x;mouse_y=y; }
-void input(GLFWwindow* window,float dt) { if(glfwGetKey(window,GLFW_KEY_ESCAPE))glfwSetWindowShouldClose(window,1);Vec3 f=camera.front(),forward=normalize({f.x,0,f.z}),right=normalize(cross(forward,{0,1,0}));float speed=4.5F*dt;if(glfwGetKey(window,GLFW_KEY_W))camera.position=camera.position+forward*speed;if(glfwGetKey(window,GLFW_KEY_S))camera.position=camera.position-forward*speed;if(glfwGetKey(window,GLFW_KEY_A))camera.position=camera.position-right*speed;if(glfwGetKey(window,GLFW_KEY_D))camera.position=camera.position+right*speed;camera.position.x=std::clamp(camera.position.x,-8.5F,8.5F);camera.position.z=std::clamp(camera.position.z,-8.5F,8.5F);camera.position.y=1.4F; }
-GLuint compile(GLenum type,const char* source) { GLuint s=glCreateShader(type);glShaderSource(s,1,&source,nullptr);glCompileShader(s);GLint ok=0;glGetShaderiv(s,GL_COMPILE_STATUS,&ok);if(!ok){GLint n=0;glGetShaderiv(s,GL_INFO_LOG_LENGTH,&n);std::string log(static_cast<size_t>(n),' ');glGetShaderInfoLog(s,n,nullptr,log.data());std::cerr<<log;glDeleteShader(s);return 0;}return s; }
-GLuint create_program() { const char* vs=R"(#version 330 core
-layout(location=0)in vec3 position;layout(location=1)in vec3 normal;uniform mat4 model,view,projection;out vec3 world_position,world_normal;void main(){world_position=vec3(model*vec4(position,1));world_normal=normalize(mat3(model)*normal);gl_Position=projection*view*vec4(world_position,1);})";const char* fs=R"(#version 330 core
-in vec3 world_position,world_normal;uniform vec3 object_color,light_position,view_position;out vec4 color;void main(){vec3 l=normalize(light_position-world_position);float diffuse=max(dot(normalize(world_normal),l),0);float distance=length(light_position-world_position);float attenuation=1.0/(1.0+.045*distance+.0075*distance*distance);color=vec4(object_color*(.14+diffuse*attenuation*1.35),1);})";GLuint v=compile(GL_VERTEX_SHADER,vs),f=compile(GL_FRAGMENT_SHADER,fs);if(!v||!f)return 0;GLuint p=glCreateProgram();glAttachShader(p,v);glAttachShader(p,f);glLinkProgram(p);glDeleteShader(v);glDeleteShader(f);return p; }
-void draw_box(GLuint program,GLuint vao,Vec3 position,Vec3 size,Vec3 color) { Mat4 model=model_matrix(position,size);glUniformMatrix4fv(glGetUniformLocation(program,"model"),1,GL_FALSE,model.v);glUniform3f(glGetUniformLocation(program,"object_color"),color.x,color.y,color.z);glBindVertexArray(vao);glDrawArrays(GL_TRIANGLES,0,36); }
+struct Vec3 {
+  float x, y, z;
+};
+Vec3 operator+(Vec3 a, Vec3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+Vec3 operator-(Vec3 a, Vec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+Vec3 operator*(Vec3 a, float s) { return {a.x * s, a.y * s, a.z * s}; }
+float dot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+Vec3 cross(Vec3 a, Vec3 b) {
+  return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
+Vec3 normalize(Vec3 a) {
+  float l = std::sqrt(dot(a, a));
+  return l > 0 ? a * (1.0F / l) : Vec3{0, 0, 0};
+}
+struct Mat4 {
+  float v[16]{};
+};
+Mat4 identity() {
+  Mat4 r{};
+  r.v[0] = r.v[5] = r.v[10] = r.v[15] = 1;
+  return r;
+}
+Mat4 operator*(const Mat4 &a, const Mat4 &b) {
+  Mat4 r{};
+  for (int c = 0; c < 4; c++)
+    for (int y = 0; y < 4; y++)
+      for (int k = 0; k < 4; k++)
+        r.v[c * 4 + y] += a.v[k * 4 + y] * b.v[c * 4 + k];
+  return r;
+}
+Mat4 model_matrix(Vec3 p, Vec3 s) {
+  Mat4 r = identity();
+  r.v[0] = s.x;
+  r.v[5] = s.y;
+  r.v[10] = s.z;
+  r.v[12] = p.x;
+  r.v[13] = p.y;
+  r.v[14] = p.z;
+  return r;
+}
+Mat4 perspective(float fov, float aspect, float near_plane, float far_plane) {
+  float t = std::tan(fov / 2);
+  Mat4 r{};
+  r.v[0] = 1 / (aspect * t);
+  r.v[5] = 1 / t;
+  r.v[10] = -(far_plane + near_plane) / (far_plane - near_plane);
+  r.v[11] = -1;
+  r.v[14] = -2 * far_plane * near_plane / (far_plane - near_plane);
+  return r;
+}
+Mat4 view_matrix(Vec3 eye, Vec3 target) {
+  Vec3 f = normalize(target - eye), r = normalize(cross(f, {0, 1, 0})),
+       u = cross(r, f);
+  Mat4 m = identity();
+  m.v[0] = r.x;
+  m.v[4] = r.y;
+  m.v[8] = r.z;
+  m.v[1] = u.x;
+  m.v[5] = u.y;
+  m.v[9] = u.z;
+  m.v[2] = -f.x;
+  m.v[6] = -f.y;
+  m.v[10] = -f.z;
+  m.v[12] = -dot(r, eye);
+  m.v[13] = -dot(u, eye);
+  m.v[14] = dot(f, eye);
+  return m;
+}
+struct Camera {
+  Vec3 position{0, 1.4F, 6};
+  float yaw = -90, pitch = 0;
+  Vec3 front() const {
+    float y = yaw * 3.14159265F / 180, p = pitch * 3.14159265F / 180;
+    return normalize(
+        {std::cos(y) * std::cos(p), std::sin(p), std::sin(y) * std::cos(p)});
+  }
+} camera;
+bool first_mouse = true;
+double mouse_x = 640, mouse_y = 360;
+void mouse_callback(GLFWwindow *, double x, double y) {
+  if (first_mouse) {
+    mouse_x = x;
+    mouse_y = y;
+    first_mouse = false;
+  }
+  camera.yaw += float(x - mouse_x) * .1F;
+  camera.pitch =
+      std::clamp(camera.pitch + float(mouse_y - y) * .1F, -88.0F, 88.0F);
+  mouse_x = x;
+  mouse_y = y;
+}
+void input(GLFWwindow *window, float dt) {
+  if (glfwGetKey(window, GLFW_KEY_ESCAPE))
+    glfwSetWindowShouldClose(window, 1);
+  Vec3 f = camera.front(), forward = normalize({f.x, 0, f.z}),
+       right = normalize(cross(forward, {0, 1, 0}));
+  float speed = 4.5F * dt;
+  if (glfwGetKey(window, GLFW_KEY_W))
+    camera.position = camera.position + forward * speed;
+  if (glfwGetKey(window, GLFW_KEY_S))
+    camera.position = camera.position - forward * speed;
+  if (glfwGetKey(window, GLFW_KEY_A))
+    camera.position = camera.position - right * speed;
+  if (glfwGetKey(window, GLFW_KEY_D))
+    camera.position = camera.position + right * speed;
+  camera.position.x = std::clamp(camera.position.x, -8.5F, 8.5F);
+  camera.position.z = std::clamp(camera.position.z, -8.5F, 8.5F);
+  camera.position.y = 1.4F;
+}
+GLuint compile(GLenum type, const char *source) {
+  GLuint s = glCreateShader(type);
+  glShaderSource(s, 1, &source, nullptr);
+  glCompileShader(s);
+  GLint ok = 0;
+  glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+  if (!ok) {
+    GLint n = 0;
+    glGetShaderiv(s, GL_INFO_LOG_LENGTH, &n);
+    std::string log(static_cast<size_t>(n), ' ');
+    glGetShaderInfoLog(s, n, nullptr, log.data());
+    std::cerr << log;
+    glDeleteShader(s);
+    return 0;
+  }
+  return s;
+}
+GLuint create_program() {
+  const char *vs = R"(#version 330 core
+layout(location=0)in vec3 position;layout(location=1)in vec3 normal;uniform mat4 model,view,projection;out vec3 world_position,world_normal;void main(){world_position=vec3(model*vec4(position,1));world_normal=normalize(mat3(model)*normal);gl_Position=projection*view*vec4(world_position,1);})";
+  const char *fs = R"(#version 330 core
+in vec3 world_position,world_normal;uniform vec3 object_color,light_position,view_position;out vec4 color;void main(){vec3 l=normalize(light_position-world_position);float diffuse=max(dot(normalize(world_normal),l),0);float distance=length(light_position-world_position);float attenuation=1.0/(1.0+.045*distance+.0075*distance*distance);color=vec4(object_color*(.14+diffuse*attenuation*1.35),1);})";
+  GLuint v = compile(GL_VERTEX_SHADER, vs), f = compile(GL_FRAGMENT_SHADER, fs);
+  if (!v || !f)
+    return 0;
+  GLuint p = glCreateProgram();
+  glAttachShader(p, v);
+  glAttachShader(p, f);
+  glLinkProgram(p);
+  glDeleteShader(v);
+  glDeleteShader(f);
+  return p;
+}
+void draw_box(GLuint program, GLuint vao, Vec3 position, Vec3 size,
+              Vec3 color) {
+  Mat4 model = model_matrix(position, size);
+  glUniformMatrix4fv(glGetUniformLocation(program, "model"), 1, GL_FALSE,
+                     model.v);
+  glUniform3f(glGetUniformLocation(program, "object_color"), color.x, color.y,
+              color.z);
+  glBindVertexArray(vao);
+  glDrawArrays(GL_TRIANGLES, 0, 36);
+}
+} // namespace
 int main() {
-    if(!glfwInit()) return 1; glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR,3);glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR,3);glfwWindowHint(GLFW_OPENGL_PROFILE,GLFW_OPENGL_CORE_PROFILE);
-    GLFWwindow* window=glfwCreateWindow(1280,720,"Doom OpenGL - WASD + Mouse",nullptr,nullptr); if(!window){glfwTerminate();return 1;} glfwMakeContextCurrent(window);glfwSetCursorPosCallback(window,mouse_callback);glfwSetInputMode(window,GLFW_CURSOR,GLFW_CURSOR_DISABLED); if(!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))return 1;
-    const Vec3 corners[]={{-.5F,-.5F,-.5F},{.5F,-.5F,-.5F},{.5F,.5F,-.5F},{-.5F,.5F,-.5F},{-.5F,-.5F,.5F},{.5F,-.5F,.5F},{.5F,.5F,.5F},{-.5F,.5F,.5F}};const Vec3 normals[]={{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};const int faces[6][6]={{0,4,7,7,3,0},{1,2,6,6,5,1},{0,1,5,5,4,0},{3,7,6,6,2,3},{0,3,2,2,1,0},{4,5,6,6,7,4}};
-    float vertices[216];int offset=0;for(int face=0;face<6;face++)for(int i=0;i<6;i++){Vec3 p=corners[faces[face][i]],n=normals[face];vertices[offset++]=p.x;vertices[offset++]=p.y;vertices[offset++]=p.z;vertices[offset++]=n.x;vertices[offset++]=n.y;vertices[offset++]=n.z;}
-    GLuint vao=0,vbo=0;glGenVertexArrays(1,&vao);glGenBuffers(1,&vbo);glBindVertexArray(vao);glBindBuffer(GL_ARRAY_BUFFER,vbo);glBufferData(GL_ARRAY_BUFFER,sizeof(vertices),vertices,GL_STATIC_DRAW);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,6*sizeof(float),nullptr);glEnableVertexAttribArray(0);glVertexAttribPointer(1,3,GL_FLOAT,GL_FALSE,6*sizeof(float),reinterpret_cast<void*>(3*sizeof(float)));glEnableVertexAttribArray(1);
-    GLuint program=create_program();if(!program)return 1;glEnable(GL_DEPTH_TEST);glUseProgram(program);glUniform3f(glGetUniformLocation(program,"light_position"),0,3.5F,1);
-     constexpr int pixel_width=320,pixel_height=180;GLuint pixel_fbo=0,pixel_color=0,pixel_depth=0;glGenFramebuffers(1,&pixel_fbo);glBindFramebuffer(GL_FRAMEBUFFER,pixel_fbo);glGenTextures(1,&pixel_color);glBindTexture(GL_TEXTURE_2D,pixel_color);glTexImage2D(GL_TEXTURE_2D,0,GL_RGB8,pixel_width,pixel_height,0,GL_RGB,GL_UNSIGNED_BYTE,nullptr);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,pixel_color,0);glGenRenderbuffers(1,&pixel_depth);glBindRenderbuffer(GL_RENDERBUFFER,pixel_depth);glRenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH24_STENCIL8,pixel_width,pixel_height);glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,GL_RENDERBUFFER,pixel_depth);if(glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE){glfwDestroyWindow(window);glfwTerminate();return 1;}glBindFramebuffer(GL_FRAMEBUFFER,0);
-     double previous=glfwGetTime();while(!glfwWindowShouldClose(window)){double now=glfwGetTime();input(window,std::min(float(now-previous),.1F));previous=now;int width=1,height=1;glfwGetFramebufferSize(window,&width,&height);glBindFramebuffer(GL_FRAMEBUFFER,pixel_fbo);glViewport(0,0,pixel_width,pixel_height);Mat4 view=view_matrix(camera.position,camera.position+camera.front()),projection=perspective(70*3.14159265F/180,float(pixel_width)/pixel_height,.1F,100);glUseProgram(program);glUniformMatrix4fv(glGetUniformLocation(program,"view"),1,GL_FALSE,view.v);glUniformMatrix4fv(glGetUniformLocation(program,"projection"),1,GL_FALSE,projection.v);glUniform3f(glGetUniformLocation(program,"view_position"),camera.position.x,camera.position.y,camera.position.z);glClearColor(.025F,.018F,.03F,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-         draw_box(program,vao,{0,-.25F,0},{18,.5F,18},{.17F,.09F,.08F});draw_box(program,vao,{0,5,0},{18,.5F,18},{.1F,.07F,.12F});draw_box(program,vao,{0,2.4F,-9},{18,5,.5F},{.34F,.08F,.06F});draw_box(program,vao,{-9,2.4F,0},{.5F,5,18},{.26F,.07F,.08F});draw_box(program,vao,{9,2.4F,0},{.5F,5,18},{.26F,.07F,.08F});draw_box(program,vao,{-4.5F,1.2F,-2.5F},{1.4F,2.4F,1.4F},{.45F,.18F,.07F});draw_box(program,vao,{4.5F,1.2F,-5.5F},{1.4F,2.4F,1.4F},{.4F,.12F,.05F});draw_box(program,vao,{-4.5F,1.2F,-7},{1.4F,2.4F,1.4F},{.5F,.2F,.06F});draw_box(program,vao,{4.5F,1.2F,-1},{1.4F,2.4F,1.4F},{.32F,.13F,.06F});glBindFramebuffer(GL_READ_FRAMEBUFFER,pixel_fbo);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,0);glBlitFramebuffer(0,0,pixel_width,pixel_height,0,0,width,height,GL_COLOR_BUFFER_BIT,GL_NEAREST);glfwSwapBuffers(window);glfwPollEvents();}
-     glDeleteRenderbuffers(1,&pixel_depth);glDeleteTextures(1,&pixel_color);glDeleteFramebuffers(1,&pixel_fbo);glDeleteProgram(program);glDeleteBuffers(1,&vbo);glDeleteVertexArrays(1,&vao);glfwDestroyWindow(window);glfwTerminate();return 0;
+  if (!glfwInit())
+    return 1;
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+  GLFWwindow *window = glfwCreateWindow(1280, 720, "Doom OpenGL - WASD + Mouse",
+                                        nullptr, nullptr);
+  if (!window) {
+    glfwTerminate();
+    return 1;
+  }
+  glfwMakeContextCurrent(window);
+  glfwSetCursorPosCallback(window, mouse_callback);
+  glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+  if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+    return 1;
+  const Vec3 corners[] = {{-.5F, -.5F, -.5F}, {.5F, -.5F, -.5F},
+                          {.5F, .5F, -.5F},   {-.5F, .5F, -.5F},
+                          {-.5F, -.5F, .5F},  {.5F, -.5F, .5F},
+                          {.5F, .5F, .5F},    {-.5F, .5F, .5F}};
+  const Vec3 normals[] = {{-1, 0, 0}, {1, 0, 0},  {0, -1, 0},
+                          {0, 1, 0},  {0, 0, -1}, {0, 0, 1}};
+  const int faces[6][6] = {{0, 4, 7, 7, 3, 0}, {1, 2, 6, 6, 5, 1},
+                           {0, 1, 5, 5, 4, 0}, {3, 7, 6, 6, 2, 3},
+                           {0, 3, 2, 2, 1, 0}, {4, 5, 6, 6, 7, 4}};
+  float vertices[216];
+  int offset = 0;
+  for (int face = 0; face < 6; face++)
+    for (int i = 0; i < 6; i++) {
+      Vec3 p = corners[faces[face][i]], n = normals[face];
+      vertices[offset++] = p.x;
+      vertices[offset++] = p.y;
+      vertices[offset++] = p.z;
+      vertices[offset++] = n.x;
+      vertices[offset++] = n.y;
+      vertices[offset++] = n.z;
+    }
+  GLuint vao = 0, vbo = 0;
+  glGenVertexArrays(1, &vao);
+  glGenBuffers(1, &vbo);
+  glBindVertexArray(vao);
+  glBindBuffer(GL_ARRAY_BUFFER, vbo);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                        reinterpret_cast<void *>(3 * sizeof(float)));
+  glEnableVertexAttribArray(1);
+  GLuint program = create_program();
+  if (!program)
+    return 1;
+  glEnable(GL_DEPTH_TEST);
+  glUseProgram(program);
+  glUniform3f(glGetUniformLocation(program, "light_position"), 0, 3.5F, 1);
+  constexpr int pixel_width = 320, pixel_height = 180;
+  GLuint pixel_fbo = 0, pixel_color = 0, pixel_depth = 0;
+  glGenFramebuffers(1, &pixel_fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, pixel_fbo);
+  glGenTextures(1, &pixel_color);
+  glBindTexture(GL_TEXTURE_2D, pixel_color);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, pixel_width, pixel_height, 0, GL_RGB,
+               GL_UNSIGNED_BYTE, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         pixel_color, 0);
+  glGenRenderbuffers(1, &pixel_depth);
+  glBindRenderbuffer(GL_RENDERBUFFER, pixel_depth);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, pixel_width,
+                        pixel_height);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                            GL_RENDERBUFFER, pixel_depth);
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    glfwDestroyWindow(window);
+    glfwTerminate();
+    return 1;
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  double previous = glfwGetTime();
+  while (!glfwWindowShouldClose(window)) {
+    double now = glfwGetTime();
+    input(window, std::min(float(now - previous), .1F));
+    previous = now;
+    int width = 1, height = 1;
+    glfwGetFramebufferSize(window, &width, &height);
+    glBindFramebuffer(GL_FRAMEBUFFER, pixel_fbo);
+    glViewport(0, 0, pixel_width, pixel_height);
+    Mat4 view = view_matrix(camera.position, camera.position + camera.front()),
+         projection = perspective(70 * 3.14159265F / 180,
+                                  float(pixel_width) / pixel_height, .1F, 100);
+    glUseProgram(program);
+    glUniformMatrix4fv(glGetUniformLocation(program, "view"), 1, GL_FALSE,
+                       view.v);
+    glUniformMatrix4fv(glGetUniformLocation(program, "projection"), 1, GL_FALSE,
+                       projection.v);
+    glUniform3f(glGetUniformLocation(program, "view_position"),
+                camera.position.x, camera.position.y, camera.position.z);
+    glClearColor(.025F, .018F, .03F, 1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    draw_box(program, vao, {0, -.25F, 0}, {18, .5F, 18}, {.17F, .09F, .08F});
+    draw_box(program, vao, {0, 5, 0}, {18, .5F, 18}, {.1F, .07F, .12F});
+    draw_box(program, vao, {0, 2.4F, -9}, {18, 5, .5F}, {.34F, .08F, .06F});
+    draw_box(program, vao, {-9, 2.4F, 0}, {.5F, 5, 18}, {.26F, .07F, .08F});
+    draw_box(program, vao, {9, 2.4F, 0}, {.5F, 5, 18}, {.26F, .07F, .08F});
+    draw_box(program, vao, {-4.5F, 1.2F, -2.5F}, {1.4F, 2.4F, 1.4F},
+             {.45F, .18F, .07F});
+    draw_box(program, vao, {4.5F, 1.2F, -5.5F}, {1.4F, 2.4F, 1.4F},
+             {.4F, .12F, .05F});
+    draw_box(program, vao, {-4.5F, 1.2F, -7}, {1.4F, 2.4F, 1.4F},
+             {.5F, .2F, .06F});
+    draw_box(program, vao, {4.5F, 1.2F, -1}, {1.4F, 2.4F, 1.4F},
+             {.32F, .13F, .06F});
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, pixel_fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBlitFramebuffer(0, 0, pixel_width, pixel_height, 0, 0, width, height,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glfwSwapBuffers(window);
+    glfwPollEvents();
+  }
+  glDeleteRenderbuffers(1, &pixel_depth);
+  glDeleteTextures(1, &pixel_color);
+  glDeleteFramebuffers(1, &pixel_fbo);
+  glDeleteProgram(program);
+  glDeleteBuffers(1, &vbo);
+  glDeleteVertexArrays(1, &vao);
+  glfwDestroyWindow(window);
+  glfwTerminate();
+  return 0;
 }
