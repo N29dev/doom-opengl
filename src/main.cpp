@@ -113,6 +113,8 @@ namespace {
     } camera;
 
     bool firstMouse = true;
+    bool flashlightEnabled = false;
+    bool flashlightKeyHeld = false;
     double mouseX = 640.0;
     double mouseY = 360.0;
 
@@ -138,6 +140,12 @@ namespace {
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
+
+        // Toggle only once per press, rather than every frame while F is held.
+        const bool fPressed = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
+        if (fPressed && !flashlightKeyHeld)
+            flashlightEnabled = !flashlightEnabled;
+        flashlightKeyHeld = fPressed;
 
         Vec3 front = camera.front();
         Vec3 forward = normalize({ front.x, 0.0f, front.z });
@@ -207,6 +215,8 @@ in vec3 world_normal;
 uniform vec3 object_color;
 uniform vec3 light_position;
 uniform vec3 view_position;
+uniform vec3 flashlight_direction;
+uniform bool flashlight_enabled;
 
 out vec4 color;
 
@@ -262,7 +272,23 @@ void main()
     vec3 ambient = baseColor * 0.22;
     vec3 direct = baseColor * diffuse * attenuation * 1.5;
 
-    color = vec4(ambient + direct, 1.0);
+    // Player flashlight: a soft-edged spotlight pointed along the camera.
+    vec3 flashlight = vec3(0.0);
+    if (flashlight_enabled)
+    {
+        vec3 fromEye = world_position - view_position;
+        float eyeDistance = length(fromEye);
+        vec3 rayDirection = normalize(fromEye);
+        float cone = smoothstep(0.90, 0.97,
+                                dot(rayDirection, flashlight_direction));
+        float facing = max(dot(n, -rayDirection), 0.0);
+        float falloff = 1.0 / (1.0 + 0.12 * eyeDistance
+                                   + 0.04 * eyeDistance * eyeDistance);
+        flashlight = baseColor * vec3(1.0, 0.93, 0.78)
+                     * cone * facing * falloff * 2.3;
+    }
+
+    color = vec4(ambient + direct + flashlight, 1.0);
 }
 )";
 
@@ -496,6 +522,15 @@ int main() {
         glUniform3f(
             glGetUniformLocation(program, "view_position"),
             camera.position.x, camera.position.y, camera.position.z
+        );
+        Vec3 flashlightDirection = camera.front();
+        glUniform3f(
+            glGetUniformLocation(program, "flashlight_direction"),
+            flashlightDirection.x, flashlightDirection.y, flashlightDirection.z
+        );
+        glUniform1i(
+            glGetUniformLocation(program, "flashlight_enabled"),
+            flashlightEnabled ? GL_TRUE : GL_FALSE
         );
 
         glClearColor(0.025f, 0.018f, 0.03f, 1.0f);
