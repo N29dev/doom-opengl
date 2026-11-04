@@ -63,11 +63,20 @@ function status(message, bad=false) {
  $('status').textContent=message;
  $('status').style.color=bad?'#ffa6a6':'#92d8c2';
 }
+function setCell(x,y,symbol) {
+ rows[y][x]=symbol;
+ const tile=$('grid').children[y*rows[0].length+x];
+ if(!tile)return;
+ tile.className='cell '+bySymbol[symbol][2];
+ tile.textContent=symbol==='.'||symbol==='#'?'':symbol;
+ tile.title=x+','+y+' · '+bySymbol[symbol][1];
+}
 function paint(x,y) {
  if(!rows[y] || rows[y][x]===undefined) return;
- if(brush==='P'||brush==='X') for(let j=0;j<rows.length;j++) for(let i=0;i<rows[0].length;i++) if(rows[j][i]===brush) rows[j][i]='.';
- rows[y][x]=brush;
- render();
+ if(brush==='P'||brush==='X')
+  for(let j=0;j<rows.length;j++) for(let i=0;i<rows[0].length;i++)
+   if(rows[j][i]===brush)setCell(i,j,'.');
+ setCell(x,y,brush);
 }
 function render() {
  $('width').value=rows[0].length; $('height').value=rows.length;
@@ -103,7 +112,11 @@ function blank(w,h) {
  render();
  status('New map created. Design the level, then export JSON.');
 }
-$('blank').onclick=()=>blank(+ $('width').value,+ $('height').value);
+$('blank').onclick=()=>{
+ const w=+ $('width').value,h=+ $('height').value;
+ if(!Number.isInteger(w)||!Number.isInteger(h)||w<6||h<6||w>64||h>64){status('Size must be 6–64 tiles in each direction.',true);return}
+ blank(w,h);
+};
 $('resize').onclick=()=>{
  const w=+ $('width').value,h=+ $('height').value;
  if(!Number.isInteger(w)||!Number.isInteger(h)||w<6||h<6||w>64||h>64){status('Size must be 6–64 tiles in each direction.',true);return}

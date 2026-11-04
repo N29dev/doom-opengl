@@ -1,0 +1,20 @@
+name: Validate levels and compile game
+
+on:
+  push:
+    branches: [main, feature/mechanics-test-arena]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install OpenGL and X11 headers
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev
+      - name: Validate JSON test arena
+        run: python3 tools/validate_levels.py
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DGLFW_BUILD_WAYLAND=OFF
+      - name: Compile
+        run: cmake --build build --parallel 2

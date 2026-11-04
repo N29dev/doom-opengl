@@ -192,7 +192,7 @@ namespace {
         if (restartPressed && !restartKeyHeld) {
             reset_game();
             glfwSetWindowTitle(window, "DOOM OpenGL | E: door | F: light | R: restart");
-            std::cout << "Level restarted.\\n";
+            std::cout << "Level restarted.\n";
         }
         restartKeyHeld = restartPressed;
         if (playerHealth <= 0 || gameWon) return;
@@ -203,7 +203,7 @@ namespace {
 
         const bool ePressed = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
         if (ePressed && !interactKeyHeld && level.toggleNearbyDoor(camera.position.x, camera.position.z))
-            std::cout << "Door toggled.\\n";
+            std::cout << "Door toggled.\n";
         interactKeyHeld = ePressed;
 
         const Vec3 front = camera.front();
@@ -249,7 +249,7 @@ namespace {
         shotFlashTimer = std::max(0.0f, shotFlashTimer - deltaTime);
         if (playerHealth < 100 && level.collectNearbyHealth(camera.position.x, camera.position.z)) {
             playerHealth = std::min(100, playerHealth + 35);
-            std::cout << "Picked up health. Current health: " << playerHealth << '\\n';
+            std::cout << "Picked up health. Current health: " << playerHealth << '\n';
         }
 
         // Prototype enemy movement: move directly toward the player if nearby.
@@ -273,7 +273,7 @@ namespace {
                 playerHealth = std::max(0, playerHealth - 10);
                 damageCooldown = 1.0f;
                 if (playerHealth == 0) {
-                    std::cout << "You died. Press R to restart.\\n";
+                    std::cout << "You died. Press R to restart.\n";
                     glfwSetWindowTitle(window, "YOU DIED - press R to restart");
                 }
             }
@@ -281,7 +281,7 @@ namespace {
 
         if (level.reachedExit(camera.position.x, camera.position.z)) {
             gameWon = true;
-            std::cout << "Test level complete! Press R to restart.\\n";
+            std::cout << "Test level complete! Press R to restart.\n";
             glfwSetWindowTitle(window, "TEST COMPLETE - press R to restart");
         }
     }
@@ -356,7 +356,7 @@ namespace {
             rayEnd = camera.position + direction * nearestHit;
             enemies[hitEnemy].health = std::max(0, enemies[hitEnemy].health - 34);
             if (enemies[hitEnemy].health == 0)
-                std::cout << "Enemy eliminated.\\n";
+                std::cout << "Enemy eliminated.\n";
         }
     }
 
@@ -728,12 +728,12 @@ int main(int argc, char** argv) {
     const std::string levelFile = argc > 1 ? argv[1] : "assets/levels/test_arena.json";
     std::string loadError;
     if (!initialLevel.load(levelFile, loadError)) {
-        std::cerr << loadError << '\\n';
+        std::cerr << loadError << '\n';
         return 1;
     }
     reset_game();
     std::cout << "Loaded " << levelFile << " | W/A/S/D: move, Space: jump, "
-              << "mouse: aim, left-click: shoot, E: door, F: light, R: restart.\\n";
+              << "mouse: aim, left-click: shoot, E: door, F: light, R: restart.\n";
 
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW.\n";
