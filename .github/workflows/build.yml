@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  build:
+  linux:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -18,3 +18,28 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DGLFW_BUILD_WAYLAND=OFF
       - name: Compile
         run: cmake --build build --parallel 2
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate JSON test arena
+        run: python tools/validate_levels.py
+      - name: Configure Visual Studio build
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+      - name: Compile Windows Release
+        run: cmake --build build --config Release --parallel 4
+      - name: Prepare portable test folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist/assets/levels" | Out-Null
+          Copy-Item "build/Release/doom_opengl.exe" "dist/doom_opengl.exe"
+          Copy-Item "assets/levels/test_arena.json" "dist/assets/levels/test_arena.json"
+          Copy-Item "tools/level-maker.html" "dist/level-maker.html"
+          Copy-Item "README.md" "dist/README.md"
+      - name: Upload Windows test game
+        uses: actions/upload-artifact@v4
+        with:
+          name: doom-opengl-windows-test
+          path: dist/
+          if-no-files-found: error
