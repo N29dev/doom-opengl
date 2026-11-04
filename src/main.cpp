@@ -1,6 +1,7 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <string>
@@ -99,6 +100,8 @@ namespace {
         Vec3 position{ 0, 1.4f, 6.0f };
         float yaw = -90.0f;
         float pitch = 0.0f;
+        float verticalVelocity = 0.0f;
+        bool onGround = true;
 
         Vec3 front() const {
             const float radians = 3.14159265f / 180.0f;
@@ -115,6 +118,27 @@ namespace {
     bool firstMouse = true;
     double mouseX = 640.0;
     double mouseY = 360.0;
+    bool previousSpacePressed = false;
+    bool previousFirePressed = false;
+    int playerHealth = 100;
+    float damageCooldown = 0.0f;
+    float shotFlashTimer = 0.0f;
+    constexpr float weaponRange = 24.0f;
+    Vec3 rayEnd{};
+
+    struct Enemy {
+        Vec3 position;
+        Vec3 size;
+        int health;
+    };
+
+    std::array<Enemy, 3> enemies{{
+        { { 0.0f, 0.9f, -3.5f }, { 0.8f, 1.8f, 0.8f }, 100 },
+        { { -2.8f, 0.9f, -6.5f }, { 0.8f, 1.8f, 0.8f }, 100 },
+        { { 2.8f, 0.9f, -7.0f }, { 0.8f, 1.8f, 0.8f }, 100 }
+    }};
+
+    void fire_weapon();
 
     void mouse_callback(GLFWwindow*, double x, double y) {
         if (firstMouse) {
@@ -153,9 +177,97 @@ namespace {
         if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
             camera.position = camera.position + right * speed;
 
+        bool spacePressed = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+        if (spacePressed && !previousSpacePressed && camera.onGround) {
+            camera.verticalVelocity = 6.5f;
+            camera.onGround = false;
+        }
+        previousSpacePressed = spacePressed;
+
+        bool firePressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        if (firePressed && !previousFirePressed) {
+            fire_weapon();
+        }
+        previousFirePressed = firePressed;
+
+        camera.position.y += camera.verticalVelocity * deltaTime;
+        camera.verticalVelocity -= 18.0f * deltaTime;
+        if (camera.position.y <= 1.4f) {
+            camera.position.y = 1.4f;
+            camera.verticalVelocity = 0.0f;
+            camera.onGround = true;
+        }
+
         camera.position.x = std::clamp(camera.position.x, -8.0f, 8.0f);
         camera.position.z = std::clamp(camera.position.z, -8.0f, 8.0f);
-        camera.position.y = 1.4f;
+        damageCooldown = std::max(0.0f, damageCooldown - deltaTime);
+        shotFlashTimer = std::max(0.0f, shotFlashTimer - deltaTime);
+
+        if (damageCooldown <= 0.0f) {
+            for (const Enemy& enemy : enemies) {
+                if (enemy.health <= 0) continue;
+
+                float dx = camera.position.x - enemy.position.x;
+                float dz = camera.position.z - enemy.position.z;
+                if (dx * dx + dz * dz < 1.2f * 1.2f) {
+                    playerHealth = std::max(0, playerHealth - 10);
+                    damageCooldown = 1.0f;
+                    break;
+                }
+            }
+        }
+    }
+
+    bool ray_intersects_enemy(Vec3 origin, Vec3 direction, const Enemy& enemy, float& distance) {
+        const float origins[] = { origin.x, origin.y, origin.z };
+        const float directions[] = { direction.x, direction.y, direction.z };
+        const float halfSizes[] = { enemy.size.x * 0.5f, enemy.size.y * 0.5f, enemy.size.z * 0.5f };
+        const float centers[] = { enemy.position.x, enemy.position.y, enemy.position.z };
+        float nearDistance = 0.0f;
+        float farDistance = weaponRange;
+
+        for (int axis = 0; axis < 3; ++axis) {
+            float minimum = centers[axis] - halfSizes[axis];
+            float maximum = centers[axis] + halfSizes[axis];
+            if (std::abs(directions[axis]) < 0.0001f) {
+                if (origins[axis] < minimum || origins[axis] > maximum) return false;
+                continue;
+            }
+
+            float first = (minimum - origins[axis]) / directions[axis];
+            float second = (maximum - origins[axis]) / directions[axis];
+            if (first > second) std::swap(first, second);
+            nearDistance = std::max(nearDistance, first);
+            farDistance = std::min(farDistance, second);
+            if (nearDistance > farDistance) return false;
+        }
+
+        distance = nearDistance;
+        return farDistance >= 0.0f && nearDistance <= weaponRange;
+    }
+
+    void fire_weapon() {
+        const Vec3 direction = camera.front();
+        rayEnd = camera.position + direction * weaponRange;
+        shotFlashTimer = 0.12f;
+        float nearestHit = weaponRange;
+        int hitEnemy = -1;
+
+        for (std::size_t index = 0; index < enemies.size(); ++index) {
+            if (enemies[index].health <= 0) continue;
+
+            float hitDistance = 0.0f;
+            if (ray_intersects_enemy(camera.position, direction, enemies[index], hitDistance) &&
+                hitDistance < nearestHit) {
+                nearestHit = hitDistance;
+                hitEnemy = static_cast<int>(index);
+            }
+        }
+
+        if (hitEnemy >= 0) {
+            rayEnd = camera.position + direction * nearestHit;
+            enemies[hitEnemy].health = std::max(0, enemies[hitEnemy].health - 34);
+        }
     }
 
     GLuint compile_shader(GLenum type, const char* source) {
@@ -312,6 +424,193 @@ void main()
         glBindVertexArray(vao);
         glDrawArrays(GL_TRIANGLES, 0, 36);
     }
+
+    GLuint create_hud_program() {
+        const char* vertexSource = R"(#version 330 core
+layout(location = 0) in vec2 position;
+uniform vec2 offset;
+uniform vec2 size;
+void main() { gl_Position = vec4(position * size + offset, 0.0, 1.0); }
+)";
+        const char* fragmentSource = R"(#version 330 core
+uniform vec3 rectangle_color;
+out vec4 color;
+void main() { color = vec4(rectangle_color, 1.0); }
+)";
+
+        GLuint vertexShader = compile_shader(GL_VERTEX_SHADER, vertexSource);
+        GLuint fragmentShader = compile_shader(GL_FRAGMENT_SHADER, fragmentSource);
+        if (!vertexShader || !fragmentShader) {
+            if (vertexShader) glDeleteShader(vertexShader);
+            if (fragmentShader) glDeleteShader(fragmentShader);
+            return 0;
+        }
+
+        GLuint program = glCreateProgram();
+        glAttachShader(program, vertexShader);
+        glAttachShader(program, fragmentShader);
+        glLinkProgram(program);
+        glDeleteShader(vertexShader);
+        glDeleteShader(fragmentShader);
+
+        GLint linked = GL_FALSE;
+        glGetProgramiv(program, GL_LINK_STATUS, &linked);
+        if (linked != GL_TRUE) {
+            glDeleteProgram(program);
+            return 0;
+        }
+        return program;
+    }
+
+    struct HudRenderer {
+        GLuint program = 0;
+        GLuint vao = 0;
+        GLuint vbo = 0;
+
+        bool initialize() {
+            program = create_hud_program();
+            if (!program) return false;
+
+            constexpr float vertices[] = {
+                -0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
+                -0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f
+            };
+            glGenVertexArrays(1, &vao);
+            glGenBuffers(1, &vbo);
+            glBindVertexArray(vao);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+            glEnableVertexAttribArray(0);
+            return true;
+        }
+
+        void rectangle(float x, float y, float width, float height, Vec3 color) const {
+            glUseProgram(program);
+            glUniform2f(glGetUniformLocation(program, "offset"), x, y);
+            glUniform2f(glGetUniformLocation(program, "size"), width, height);
+            glUniform3f(glGetUniformLocation(program, "rectangle_color"), color.x, color.y, color.z);
+            glBindVertexArray(vao);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
+
+        void destroy() {
+            glDeleteBuffers(1, &vbo);
+            glDeleteVertexArrays(1, &vao);
+            glDeleteProgram(program);
+        }
+    };
+
+    GLuint create_ray_program() {
+        const char* vertexSource = R"(#version 330 core
+layout(location = 0) in vec3 position;
+uniform mat4 view;
+uniform mat4 projection;
+void main() { gl_Position = projection * view * vec4(position, 1.0); }
+)";
+        const char* fragmentSource = R"(#version 330 core
+uniform vec3 ray_color;
+out vec4 color;
+void main() { color = vec4(ray_color, 1.0); }
+)";
+
+        GLuint vertexShader = compile_shader(GL_VERTEX_SHADER, vertexSource);
+        GLuint fragmentShader = compile_shader(GL_FRAGMENT_SHADER, fragmentSource);
+        if (!vertexShader || !fragmentShader) {
+            if (vertexShader) glDeleteShader(vertexShader);
+            if (fragmentShader) glDeleteShader(fragmentShader);
+            return 0;
+        }
+
+        GLuint program = glCreateProgram();
+        glAttachShader(program, vertexShader);
+        glAttachShader(program, fragmentShader);
+        glLinkProgram(program);
+        glDeleteShader(vertexShader);
+        glDeleteShader(fragmentShader);
+
+        GLint linked = GL_FALSE;
+        glGetProgramiv(program, GL_LINK_STATUS, &linked);
+        if (linked != GL_TRUE) {
+            glDeleteProgram(program);
+            return 0;
+        }
+        return program;
+    }
+
+    struct RayRenderer {
+        GLuint program = 0;
+        GLuint vao = 0;
+        GLuint vbo = 0;
+
+        bool initialize() {
+            program = create_ray_program();
+            if (!program) return false;
+
+            glGenVertexArrays(1, &vao);
+            glGenBuffers(1, &vbo);
+            glBindVertexArray(vao);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            glBufferData(GL_ARRAY_BUFFER, 6 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+            glEnableVertexAttribArray(0);
+            return true;
+        }
+
+        void draw(Mat4 view, Mat4 projection) const {
+            if (shotFlashTimer <= 0.0f) return;
+            const float vertices[] = {
+                camera.position.x, camera.position.y, camera.position.z,
+                rayEnd.x, rayEnd.y, rayEnd.z
+            };
+            glUseProgram(program);
+            glUniformMatrix4fv(glGetUniformLocation(program, "view"), 1, GL_FALSE, view.v);
+            glUniformMatrix4fv(glGetUniformLocation(program, "projection"), 1, GL_FALSE, projection.v);
+            glUniform3f(glGetUniformLocation(program, "ray_color"), 1.0f, 0.28f, 0.04f);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+            glBindVertexArray(vao);
+            glDrawArrays(GL_LINES, 0, 2);
+        }
+
+        void destroy() {
+            glDeleteBuffers(1, &vbo);
+            glDeleteVertexArrays(1, &vao);
+            glDeleteProgram(program);
+        }
+    };
+
+    void draw_hud(const HudRenderer& hud) {
+        glDisable(GL_DEPTH_TEST);
+
+        constexpr float barX = -0.69f;
+        constexpr float barY = -0.84f;
+        constexpr float barWidth = 0.48f;
+        constexpr float barHeight = 0.09f;
+        const float healthRatio = std::clamp(playerHealth / 100.0f, 0.0f, 1.0f);
+
+        hud.rectangle(barX, barY, barWidth, barHeight, { 0.12f, 0.03f, 0.03f });
+        if (healthRatio > 0.0f) {
+            hud.rectangle(
+                barX - barWidth * (1.0f - healthRatio) * 0.5f,
+                barY, barWidth * healthRatio, barHeight * 0.55f,
+                healthRatio > 0.3f ? Vec3{ 0.18f, 0.85f, 0.18f } : Vec3{ 0.95f, 0.12f, 0.08f }
+            );
+        }
+
+        hud.rectangle(0.0f, 0.0f, 0.035f, 0.008f, { 1.0f, 0.86f, 0.62f });
+        hud.rectangle(0.0f, 0.0f, 0.008f, 0.035f, { 1.0f, 0.86f, 0.62f });
+
+        const Vec3 weaponColor{ 0.19f, 0.18f, 0.2f };
+        hud.rectangle(0.17f, -0.77f, 0.16f, 0.2f, weaponColor);
+        hud.rectangle(0.19f, -0.9f, 0.1f, 0.16f, { 0.12f, 0.11f, 0.13f });
+        hud.rectangle(0.16f, -0.61f, 0.08f, 0.16f, { 0.34f, 0.32f, 0.33f });
+        if (shotFlashTimer > 0.0f) {
+            hud.rectangle(0.16f, -0.48f, 0.12f, 0.1f, { 1.0f, 0.72f, 0.12f });
+        }
+
+        glEnable(GL_DEPTH_TEST);
+    }
 }
 
 int main() {
@@ -415,6 +714,27 @@ int main() {
     glUseProgram(program);
     glUniform3f(glGetUniformLocation(program, "light_position"), 0.0f, 3.5f, 1.0f);
 
+    HudRenderer hud;
+    if (!hud.initialize()) {
+        glDeleteProgram(program);
+        glDeleteBuffers(1, &vbo);
+        glDeleteVertexArrays(1, &vao);
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return 1;
+    }
+
+    RayRenderer rayRenderer;
+    if (!rayRenderer.initialize()) {
+        hud.destroy();
+        glDeleteProgram(program);
+        glDeleteBuffers(1, &vbo);
+        glDeleteVertexArrays(1, &vao);
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return 1;
+    }
+
     constexpr int pixelWidth = 320;
     constexpr int pixelHeight = 180;
 
@@ -453,6 +773,8 @@ int main() {
         glDeleteRenderbuffers(1, &pixelDepth);
         glDeleteTextures(1, &pixelColor);
         glDeleteFramebuffers(1, &pixelFbo);
+        rayRenderer.destroy();
+        hud.destroy();
         glDeleteProgram(program);
         glDeleteBuffers(1, &vbo);
         glDeleteVertexArrays(1, &vao);
@@ -501,20 +823,29 @@ int main() {
         glClearColor(0.025f, 0.018f, 0.03f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Floor, ceiling, and room walls.
         draw_box(program, vao, { 0, -0.25f, 0 }, { 18, 0.5f, 18 }, { 0.17f, 0.09f, 0.08f });
         draw_box(program, vao, { 0, 5.0f, 0 }, { 18, 0.5f, 18 }, { 0.1f, 0.07f, 0.12f });
         draw_box(program, vao, { 0, 2.4f, -9 }, { 18, 5, 0.5f }, { 0.34f, 0.08f, 0.06f });
         draw_box(program, vao, { -9, 2.4f, 0 }, { 0.5f, 5, 18 }, { 0.26f, 0.07f, 0.08f });
         draw_box(program, vao, { 9, 2.4f, 0 }, { 0.5f, 5, 18 }, { 0.26f, 0.07f, 0.08f });
 
-        // Pillars.
         draw_box(program, vao, { -4.5f, 1.2f, -2.5f }, { 1.4f, 2.4f, 1.4f }, { 0.45f, 0.18f, 0.07f });
         draw_box(program, vao, { 4.5f, 1.2f, -5.5f }, { 1.4f, 2.4f, 1.4f }, { 0.4f, 0.12f, 0.05f });
         draw_box(program, vao, { -4.5f, 1.2f, -7.0f }, { 1.4f, 2.4f, 1.4f }, { 0.5f, 0.2f, 0.06f });
         draw_box(program, vao, { 4.5f, 1.2f, -1.0f }, { 1.4f, 2.4f, 1.4f }, { 0.32f, 0.13f, 0.06f });
 
-        // Scale the low-resolution render to the full window using nearest filtering.
+        for (const Enemy& enemy : enemies) {
+            if (enemy.health <= 0) continue;
+            float healthRatio = enemy.health / 100.0f;
+            draw_box(
+                program, vao, enemy.position, enemy.size,
+                { 0.35f + 0.45f * healthRatio, 0.04f, 0.03f }
+            );
+        }
+
+        rayRenderer.draw(view, projection);
+        draw_hud(hud);
+
         glBindFramebuffer(GL_READ_FRAMEBUFFER, pixelFbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         glBlitFramebuffer(
@@ -530,6 +861,8 @@ int main() {
     glDeleteRenderbuffers(1, &pixelDepth);
     glDeleteTextures(1, &pixelColor);
     glDeleteFramebuffers(1, &pixelFbo);
+    rayRenderer.destroy();
+    hud.destroy();
     glDeleteProgram(program);
     glDeleteBuffers(1, &vbo);
     glDeleteVertexArrays(1, &vao);
