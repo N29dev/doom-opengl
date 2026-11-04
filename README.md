@@ -1,7 +1,7 @@
 # DOOM OpenGL — Computer Graphics Team Project
 
 A **work-in-progress** retro first-person graphics project in C++17 and OpenGL 3.3.
-The current branch is a mechanics *foundation*, not a complete game or final levels.
+This is a mechanics *foundation*, not a complete game or final levels.
 
 ## Requirements
 
@@ -84,11 +84,23 @@ Symbols:
 - `X` — exit (exactly one)
 
 All rows must have the same length. Tiles are 2×2 world units.
-Validate the layouts using:
+The game validates levels in C++ when loading them (including exit reachability).
+You can also validate JSON files **without launching the game** using the
+standalone C++ executable included in the build:
 
-```bash
-python3 tools/validate_levels.py
+Windows:
+```powershell
+.\\build\\Debug\\level_validator.exe assets\\levels\\test_arena.json
 ```
+
+macOS / Linux:
+```bash
+./build/level_validator assets/levels/test_arena.json
+```
+
+Add more file paths to validate multiple levels. It exits with a nonzero status
+for invalid files, making it useful in automated build checks.
+No Python installation is required.
 
 ## Graphics already present
 
@@ -109,7 +121,7 @@ and 320×180 retro pixel framebuffer.
 - `src/main.cpp`: current gameplay loop and rendering foundation
 - `src/Level.hpp`, `src/Level.cpp`: validated JSON level loading, tiles, collision, doors, pickups
 - `tools/level-maker.html`: simple browser-based grid editor (no game dependency)
-- `tools/validate_levels.py`: layout checks and exit reachability
+- `tools/validate_levels.cpp`: native C++ command-line validator, sharing `Level::load()` with the game
 
 This is an intermediate refactor: graphics, input, and gameplay in `main.cpp`
 should be split into modules as the team adds features.

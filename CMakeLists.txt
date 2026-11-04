@@ -42,26 +42,26 @@ FetchContent_MakeAvailable(glfw glad json)
 
 find_package(OpenGL REQUIRED)
 
-add_executable(doom_opengl
-	src/main.cpp
-	src/Level.cpp
-)
+# Share the exact same JSON validation between the game and the validator.
+add_library(level_core src/Level.cpp)
+target_include_directories(level_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(level_core PUBLIC nlohmann_json::nlohmann_json)
 
-target_link_libraries(doom_opengl
-	PRIVATE
-		glfw
-		glad
-		OpenGL::GL
-		nlohmann_json::nlohmann_json
-)
+add_executable(doom_opengl src/main.cpp)
+target_link_libraries(doom_opengl PRIVATE glfw glad OpenGL::GL level_core)
 
-target_compile_features(doom_opengl PRIVATE cxx_std_17)
+# Standalone command-line tool; no OpenGL window or Python needed.
+add_executable(level_validator tools/validate_levels.cpp)
+target_link_libraries(level_validator PRIVATE level_core)
 
-if(MSVC)
-	target_compile_options(doom_opengl PRIVATE /W4 /permissive-)
-else()
-	target_compile_options(doom_opengl PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+foreach(target_name IN ITEMS level_core doom_opengl level_validator)
+    target_compile_features(${target_name} PRIVATE cxx_std_17)
+    if(MSVC)
+        target_compile_options(${target_name} PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endforeach()
 
 set_target_properties(doom_opengl PROPERTIES
 	VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"

@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
-#include <sstream>
+#include <queue>
 
 namespace {
     bool near(float x1, float z1, float x2, float z2, float distance) {
@@ -73,6 +73,41 @@ bool Level::load(const std::string& filePath, std::string& error) {
 
         if (spawnCount != 1 || exitCount != 1) {
             error = "A level needs exactly one P spawn and one X exit.";
+            return false;
+        }
+
+        // Level validation is shared by the game and the command-line tool.
+        // Doors can be opened during gameplay, so only walls block reachability.
+        const int newHeight = static_cast<int>(tiles.size());
+        std::vector<bool> visited(static_cast<std::size_t>(newWidth) * newHeight, false);
+        std::queue<GridPosition> frontier;
+        visited[newSpawn.row * newWidth + newSpawn.column] = true;
+        frontier.push(newSpawn);
+        bool reachable = false;
+
+        constexpr int dx[] = {1, -1, 0, 0};
+        constexpr int dz[] = {0, 0, 1, -1};
+        while (!frontier.empty()) {
+            const GridPosition cell = frontier.front();
+            frontier.pop();
+            if (tiles[cell.row][cell.column] == 'X') {
+                reachable = true;
+                break;
+            }
+            for (int direction = 0; direction < 4; ++direction) {
+                const int nextColumn = cell.column + dx[direction];
+                const int nextRow = cell.row + dz[direction];
+                if (nextColumn < 0 || nextColumn >= newWidth ||
+                    nextRow < 0 || nextRow >= newHeight) continue;
+                const int nextIndex = nextRow * newWidth + nextColumn;
+                if (visited[nextIndex] || tiles[nextRow][nextColumn] == '#') continue;
+                visited[nextIndex] = true;
+                frontier.push({nextColumn, nextRow});
+            }
+        }
+
+        if (!reachable) {
+            error = "Exit X cannot be reached from spawn P (walls block the path).";
             return false;
         }
 
