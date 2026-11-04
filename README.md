@@ -1,47 +1,115 @@
-# doom-opengl
+# DOOM OpenGL — Computer Graphics Team Project
 
-Минимальная среда для разработки OpenGL на C++17 с GLFW и GLAD.
+A **work-in-progress** retro first-person graphics project in C++17 and OpenGL 3.3.
+The current branch is a mechanics *foundation*, not a complete game or final levels.
 
-## Требования
+## Requirements
 
-- Windows 10/11
-- Visual Studio 2022 с workload **Desktop development with C++**
-- CMake 3.20 или новее
-- Git в `PATH` — нужен CMake для загрузки GLFW и GLAD через FetchContent
+- CMake 3.20+ and a C++17 compiler (MSVC, Clang, or GCC)
+- OpenGL 3.3 Core support
+- Git and network access for the first CMake configuration:
+  GLFW 3.4, GLAD 0.1.36, and nlohmann/json 3.11.3 are fetched automatically
 
-## Сборка через PowerShell
+## Build
 
-Из корня репозитория:
+Windows (Visual Studio 2022 / PowerShell):
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Debug
-```
-
-Первый запуск скачает зависимости в `build/_deps`. Их не нужно добавлять в Git.
-
-Запуск:
-
-```powershell
 .\build\Debug\doom_opengl.exe
 ```
 
-Нажмите `Esc`, чтобы закрыть окно. При успешном запуске в консоли будет выведена версия OpenGL.
+macOS / Linux (from the repository root):
 
-## Управление
+```bash
+cmake -S . -B build
+cmake --build build
+./build/doom_opengl
+```
 
-- `W` / `A` / `S` / `D` — движение.
-- Мышь — обзор от первого лица.
-- `F` — включить или выключить фонарик, направленный по взгляду камеры.
-- `Esc` — выход.
+You can also start the game from the build directory because CMake copies the test arena there.
 
-## Visual Studio
+## Controls
 
-Можно открыть каталог репозитория через **File → Open → Folder**. Visual Studio обнаружит `CMakeLists.txt`, настроит CMake-проект и загрузит зависимости при конфигурации. В качестве startup item выберите `doom_opengl`.
+| Input | Action |
+| --- | --- |
+| WASD | Move and slide against walls |
+| Mouse | Look around |
+| Space | Jump |
+| Left click | Shoot (ray hit test blocked by walls and closed doors) |
+| E | Toggle nearby door |
+| F | Toggle flashlight |
+| R | Restart test level |
+| Esc | Exit |
 
-Для ручной генерации решения используйте команду выше, затем откройте `build\DoomOpenGL.sln`.
+The simple enemies move directly toward you when close enough. This is intentionally **not** full AI.
 
-## Структура
+## Level maker & test arena
 
-- `CMakeLists.txt` — сборка, OpenGL и FetchContent-зависимости.
-- `src/main.cpp` — окно GLFW и инициализация GLAD.
+Open [`tools/level-maker.html`](tools/level-maker.html) in any browser. It works offline.
+Choose a tile type, click/drag to paint the grid, then **Export JSON**.
+Copy the JSON into `assets/levels/` and launch the game with its file path:
+
+```bash
+./build/doom_opengl assets/levels/my_level.json
+```
+
+The included [`assets/levels/test_arena.json`](assets/levels/test_arena.json) has two rooms
+connected by a door, two enemies, a health pickup, and an exit for testing mechanics.
+
+Level JSON format:
+
+```json
+{
+  "name": "Tiny Example",
+  "tiles": [
+    "######",
+    "#P...#",
+    "#.D..#",
+    "#H.MX#",
+    "######"
+  ]
+}
+```
+
+Symbols:
+
+- `#` — solid wall
+- `.` — empty floor
+- `P` — player spawn (exactly one)
+- `D` — closed, interactable door
+- `M` — simple enemy spawn
+- `H` — health pickup
+- `X` — exit (exactly one)
+
+All rows must have the same length. Tiles are 2×2 world units.
+Validate the layouts using:
+
+```bash
+python3 tools/validate_levels.py
+```
+
+## Graphics already present
+
+Perspective FPS camera, OpenGL VAO/VBO meshes, shader-based procedural brick/tile
+materials, basic diffuse and ambient lighting, flashlight cone, 2D HUD,
+and 320×180 retro pixel framebuffer.
+
+## Team TODO (deliberately unfinished)
+
+- Design your own levels, artwork, textures, and models
+- Enemy AI, pathfinding, animation, and additional enemies
+- More sophisticated weapons, sound, and objectives
+- Graphics/debug views, visual polishing, performance optimization
+- Final report, demo, and exam presentation
+
+## Code layout
+
+- `src/main.cpp`: current gameplay loop and rendering foundation
+- `src/Level.hpp`, `src/Level.cpp`: validated JSON level loading, tiles, collision, doors, pickups
+- `tools/level-maker.html`: simple browser-based grid editor (no game dependency)
+- `tools/validate_levels.py`: layout checks and exit reachability
+
+This is an intermediate refactor: graphics, input, and gameplay in `main.cpp`
+should be split into modules as the team adds features.

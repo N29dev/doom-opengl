@@ -31,12 +31,20 @@ FetchContent_Declare(
 	GIT_SHALLOW TRUE
 )
 
-FetchContent_MakeAvailable(glfw glad)
+FetchContent_Declare(
+	json
+	GIT_REPOSITORY https://github.com/nlohmann/json.git
+	GIT_TAG v3.11.3
+	GIT_SHALLOW TRUE
+)
+
+FetchContent_MakeAvailable(glfw glad json)
 
 find_package(OpenGL REQUIRED)
 
 add_executable(doom_opengl
 	src/main.cpp
+	src/Level.cpp
 )
 
 target_link_libraries(doom_opengl
@@ -44,6 +52,7 @@ target_link_libraries(doom_opengl
 		glfw
 		glad
 		OpenGL::GL
+		nlohmann_json::nlohmann_json
 )
 
 target_compile_features(doom_opengl PRIVATE cxx_std_17)
@@ -59,3 +68,11 @@ set_target_properties(doom_opengl PROPERTIES
 )
 
 set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT doom_opengl)
+
+# Support launching from the build directory as well as the repository root.
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/assets/levels")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/levels/test_arena.json"
+    "${CMAKE_CURRENT_BINARY_DIR}/assets/levels/test_arena.json"
+    COPYONLY
+)

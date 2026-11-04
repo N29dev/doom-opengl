@@ -5,6 +5,8 @@
 #include <cmath>
 #include <iostream>
 #include <string>
+#include <vector>
+#include "Level.hpp"
 
 namespace {
     struct Vec3 {
@@ -134,11 +136,33 @@ namespace {
         int health;
     };
 
-    std::array<Enemy, 3> enemies{{
-        { { 0.0f, 0.9f, -3.5f }, { 0.8f, 1.8f, 0.8f }, 100 },
-        { { -2.8f, 0.9f, -6.5f }, { 0.8f, 1.8f, 0.8f }, 100 },
-        { { 2.8f, 0.9f, -7.0f }, { 0.8f, 1.8f, 0.8f }, 100 }
-    }};
+    Level level;
+    Level initialLevel;
+    std::vector<Enemy> enemies;
+    bool gameWon = false;
+    bool interactKeyHeld = false;
+    bool restartKeyHeld = false;
+
+    void reset_game() {
+        level = initialLevel; // Copy the immutable template, including closed doors and uncollected pickups.
+        enemies.clear();
+        for (const GridPosition pos : level.positions('M')) {
+            enemies.push_back({ {level.worldX(pos.column), 0.9f, level.worldZ(pos.row)},
+                                {0.8f, 1.8f, 0.8f}, 100 });
+        }
+        camera.position = {level.spawnX(), 1.4f, level.spawnZ()};
+        camera.yaw = 0.0f;
+        camera.pitch = 0.0f;
+        camera.verticalVelocity = 0.0f;
+        camera.onGround = true;
+        playerHealth = 100;
+        damageCooldown = 0.0f;
+        shotFlashTimer = 0.0f;
+        gameWon = false;
+        previousSpacePressed = false;
+        previousFirePressed = false;
+        firstMouse = true;
+    }
 
     void fire_weapon();
 
@@ -161,41 +185,56 @@ namespace {
     }
 
     void input(GLFWwindow* window, float deltaTime) {
-        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             glfwSetWindowShouldClose(window, GLFW_TRUE);
-        }
 
-        // Toggle only once per press, rather than every frame while F is held.
+        const bool restartPressed = glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS;
+        if (restartPressed && !restartKeyHeld) {
+            reset_game();
+            glfwSetWindowTitle(window, "DOOM OpenGL | E: door | F: light | R: restart");
+            std::cout << "Level restarted.\\n";
+        }
+        restartKeyHeld = restartPressed;
+        if (playerHealth <= 0 || gameWon) return;
+
         const bool fPressed = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
-        if (fPressed && !flashlightKeyHeld)
-            flashlightEnabled = !flashlightEnabled;
+        if (fPressed && !flashlightKeyHeld) flashlightEnabled = !flashlightEnabled;
         flashlightKeyHeld = fPressed;
 
-        Vec3 front = camera.front();
-        Vec3 forward = normalize({ front.x, 0.0f, front.z });
-        Vec3 right = normalize(cross(forward, { 0.0f, 1.0f, 0.0f }));
-        float speed = 4.5f * deltaTime;
+        const bool ePressed = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
+        if (ePressed && !interactKeyHeld && level.toggleNearbyDoor(camera.position.x, camera.position.z))
+            std::cout << "Door toggled.\\n";
+        interactKeyHeld = ePressed;
 
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-            camera.position = camera.position + forward * speed;
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-            camera.position = camera.position - forward * speed;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-            camera.position = camera.position - right * speed;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-            camera.position = camera.position + right * speed;
+        const Vec3 front = camera.front();
+        const Vec3 forward = normalize({front.x, 0.0f, front.z});
+        const Vec3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
+        Vec3 movement{0.0f, 0.0f, 0.0f};
 
-        bool spacePressed = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) movement = movement + forward;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) movement = movement - forward;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) movement = movement - right;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) movement = movement + right;
+
+        // Separate X/Z collision allows the player to slide along a wall.
+        if (dot(movement, movement) > 0.0f) {
+            movement = normalize(movement) * (4.5f * deltaTime);
+            constexpr float playerRadius = 0.33f;
+            if (!level.circleBlocked(camera.position.x + movement.x, camera.position.z, playerRadius))
+                camera.position.x += movement.x;
+            if (!level.circleBlocked(camera.position.x, camera.position.z + movement.z, playerRadius))
+                camera.position.z += movement.z;
+        }
+
+        const bool spacePressed = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         if (spacePressed && !previousSpacePressed && camera.onGround) {
             camera.verticalVelocity = 6.5f;
             camera.onGround = false;
         }
         previousSpacePressed = spacePressed;
 
-        bool firePressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        if (firePressed && !previousFirePressed) {
-            fire_weapon();
-        }
+        const bool firePressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        if (firePressed && !previousFirePressed) fire_weapon();
         previousFirePressed = firePressed;
 
         camera.position.y += camera.verticalVelocity * deltaTime;
@@ -206,31 +245,52 @@ namespace {
             camera.onGround = true;
         }
 
-        camera.position.x = std::clamp(camera.position.x, -8.0f, 8.0f);
-        camera.position.z = std::clamp(camera.position.z, -8.0f, 8.0f);
         damageCooldown = std::max(0.0f, damageCooldown - deltaTime);
         shotFlashTimer = std::max(0.0f, shotFlashTimer - deltaTime);
+        if (playerHealth < 100 && level.collectNearbyHealth(camera.position.x, camera.position.z)) {
+            playerHealth = std::min(100, playerHealth + 35);
+            std::cout << "Picked up health. Current health: " << playerHealth << '\\n';
+        }
 
-        if (damageCooldown <= 0.0f) {
-            for (const Enemy& enemy : enemies) {
-                if (enemy.health <= 0) continue;
-
-                float dx = camera.position.x - enemy.position.x;
-                float dz = camera.position.z - enemy.position.z;
-                if (dx * dx + dz * dz < 1.2f * 1.2f) {
-                    playerHealth = std::max(0, playerHealth - 10);
-                    damageCooldown = 1.0f;
-                    break;
+        // Prototype enemy movement: move directly toward the player if nearby.
+        // No pathfinding, animations, or advanced behavior: left for teammates.
+        for (Enemy& enemy : enemies) {
+            if (enemy.health <= 0) continue;
+            const float dx = camera.position.x - enemy.position.x;
+            const float dz = camera.position.z - enemy.position.z;
+            const float distance = std::sqrt(dx * dx + dz * dz);
+            if (distance > 1.2f && distance < 9.0f) {
+                const float stepX = dx / distance * (0.8f * deltaTime);
+                const float stepZ = dz / distance * (0.8f * deltaTime);
+                if (!level.circleBlocked(enemy.position.x + stepX, enemy.position.z, 0.42f))
+                    enemy.position.x += stepX;
+                if (!level.circleBlocked(enemy.position.x, enemy.position.z + stepZ, 0.42f))
+                    enemy.position.z += stepZ;
+            }
+            const float closeX = camera.position.x - enemy.position.x;
+            const float closeZ = camera.position.z - enemy.position.z;
+            if (damageCooldown <= 0.0f && closeX * closeX + closeZ * closeZ < 1.2f * 1.2f) {
+                playerHealth = std::max(0, playerHealth - 10);
+                damageCooldown = 1.0f;
+                if (playerHealth == 0) {
+                    std::cout << "You died. Press R to restart.\\n";
+                    glfwSetWindowTitle(window, "YOU DIED - press R to restart");
                 }
             }
         }
+
+        if (level.reachedExit(camera.position.x, camera.position.z)) {
+            gameWon = true;
+            std::cout << "Test level complete! Press R to restart.\\n";
+            glfwSetWindowTitle(window, "TEST COMPLETE - press R to restart");
+        }
     }
 
-    bool ray_intersects_enemy(Vec3 origin, Vec3 direction, const Enemy& enemy, float& distance) {
+    bool ray_intersects_box(Vec3 origin, Vec3 direction, Vec3 center, Vec3 size, float& distance) {
         const float origins[] = { origin.x, origin.y, origin.z };
         const float directions[] = { direction.x, direction.y, direction.z };
-        const float halfSizes[] = { enemy.size.x * 0.5f, enemy.size.y * 0.5f, enemy.size.z * 0.5f };
-        const float centers[] = { enemy.position.x, enemy.position.y, enemy.position.z };
+        const float halfSizes[] = { size.x * 0.5f, size.y * 0.5f, size.z * 0.5f };
+        const float centers[] = { center.x, center.y, center.z };
         float nearDistance = 0.0f;
         float farDistance = weaponRange;
 
@@ -254,12 +314,32 @@ namespace {
         return farDistance >= 0.0f && nearDistance <= weaponRange;
     }
 
+    bool ray_intersects_enemy(Vec3 origin, Vec3 direction, const Enemy& enemy, float& distance) {
+        return ray_intersects_box(origin, direction, enemy.position, enemy.size, distance);
+    }
+
     void fire_weapon() {
         const Vec3 direction = camera.front();
         rayEnd = camera.position + direction * weaponRange;
         shotFlashTimer = 0.12f;
         float nearestHit = weaponRange;
         int hitEnemy = -1;
+
+        // Find the nearest solid wall or closed door before looking for enemies.
+        // This prevents shooting through level geometry.
+        for (int row = 0; row < level.height(); ++row) {
+            for (int column = 0; column < level.width(); ++column) {
+                if (!level.isSolid(column, row)) continue;
+                float distance = 0.0f;
+                if (ray_intersects_box(camera.position, direction,
+                        {level.worldX(column), 2.25f, level.worldZ(row)},
+                        {Level::kTileSize, 4.5f, Level::kTileSize}, distance)
+                        && distance < nearestHit) {
+                    nearestHit = distance;
+                    rayEnd = camera.position + direction * distance;
+                }
+            }
+        }
 
         for (std::size_t index = 0; index < enemies.size(); ++index) {
             if (enemies[index].health <= 0) continue;
@@ -275,6 +355,8 @@ namespace {
         if (hitEnemy >= 0) {
             rayEnd = camera.position + direction * nearestHit;
             enemies[hitEnemy].health = std::max(0, enemies[hitEnemy].health - 34);
+            if (enemies[hitEnemy].health == 0)
+                std::cout << "Enemy eliminated.\\n";
         }
     }
 
@@ -608,6 +690,9 @@ void main() { color = vec4(ray_color, 1.0); }
 
     void draw_hud(const HudRenderer& hud) {
         glDisable(GL_DEPTH_TEST);
+        // Simple visual status strips; future UI and text are left for the team.
+        if (gameWon) hud.rectangle(0.0f, 0.2f, 1.25f, 0.10f, {0.05f, 0.7f, 0.3f});
+        if (playerHealth == 0) hud.rectangle(0.0f, 0.2f, 1.25f, 0.10f, {0.8f, 0.04f, 0.04f});
 
         constexpr float barX = -0.69f;
         constexpr float barY = -0.84f;
@@ -639,7 +724,17 @@ void main() { color = vec4(ray_color, 1.0); }
     }
 }
 
-int main() {
+int main(int argc, char** argv) {
+    const std::string levelFile = argc > 1 ? argv[1] : "assets/levels/test_arena.json";
+    std::string loadError;
+    if (!initialLevel.load(levelFile, loadError)) {
+        std::cerr << loadError << '\\n';
+        return 1;
+    }
+    reset_game();
+    std::cout << "Loaded " << levelFile << " | W/A/S/D: move, Space: jump, "
+              << "mouse: aim, left-click: shoot, E: door, F: light, R: restart.\\n";
+
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW.\n";
         return 1;
@@ -648,9 +743,12 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+#ifdef __APPLE__
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+#endif
 
     GLFWwindow* window = glfwCreateWindow(
-        1280, 720, "Doom OpenGL - WASD + Mouse", nullptr, nullptr
+        1280, 720, "DOOM OpenGL | E: door | F: light | R: restart", nullptr, nullptr
     );
 
     if (!window) {
@@ -858,16 +956,37 @@ int main() {
         glClearColor(0.025f, 0.018f, 0.03f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        draw_box(program, vao, { 0, -0.25f, 0 }, { 18, 0.5f, 18 }, { 0.17f, 0.09f, 0.08f });
-        draw_box(program, vao, { 0, 5.0f, 0 }, { 18, 0.5f, 18 }, { 0.1f, 0.07f, 0.12f });
-        draw_box(program, vao, { 0, 2.4f, -9 }, { 18, 5, 0.5f }, { 0.34f, 0.08f, 0.06f });
-        draw_box(program, vao, { -9, 2.4f, 0 }, { 0.5f, 5, 18 }, { 0.26f, 0.07f, 0.08f });
-        draw_box(program, vao, { 9, 2.4f, 0 }, { 0.5f, 5, 18 }, { 0.26f, 0.07f, 0.08f });
+        // Level-driven geometry. This is deliberately simple: one tile = one box.
+        // Teammates can replace the placeholder geometry and materials later.
+        const float floorWidth = level.width() * Level::kTileSize;
+        const float floorDepth = level.height() * Level::kTileSize;
+        draw_box(program, vao, {0.0f, -0.25f, 0.0f},
+                 {floorWidth, 0.5f, floorDepth}, {0.17f, 0.09f, 0.08f});
+        draw_box(program, vao, {0.0f, 4.75f, 0.0f},
+                 {floorWidth, 0.5f, floorDepth}, {0.1f, 0.07f, 0.12f});
 
-        draw_box(program, vao, { -4.5f, 1.2f, -2.5f }, { 1.4f, 2.4f, 1.4f }, { 0.45f, 0.18f, 0.07f });
-        draw_box(program, vao, { 4.5f, 1.2f, -5.5f }, { 1.4f, 2.4f, 1.4f }, { 0.4f, 0.12f, 0.05f });
-        draw_box(program, vao, { -4.5f, 1.2f, -7.0f }, { 1.4f, 2.4f, 1.4f }, { 0.5f, 0.2f, 0.06f });
-        draw_box(program, vao, { 4.5f, 1.2f, -1.0f }, { 1.4f, 2.4f, 1.4f }, { 0.32f, 0.13f, 0.06f });
+        for (int row = 0; row < level.height(); ++row) {
+            for (int column = 0; column < level.width(); ++column) {
+                const char tile = level.tileAt(column, row);
+                const float x = level.worldX(column);
+                const float z = level.worldZ(row);
+                if (level.isSolid(column, row)) {
+                    const Vec3 wallColor = tile == 'D'
+                        ? Vec3{0.48f, 0.35f, 0.09f}
+                        : Vec3{0.30f, 0.08f, 0.09f};
+                    draw_box(program, vao, {x, 2.25f, z},
+                             {Level::kTileSize, 4.5f, Level::kTileSize}, wallColor);
+                }
+                if (tile == 'H' && !level.isHealthCollected(column, row)) {
+                    draw_box(program, vao, {x, 0.5f, z},
+                             {0.6f, 0.6f, 0.6f}, {0.08f, 0.7f, 0.30f});
+                }
+                if (tile == 'X') {
+                    draw_box(program, vao, {x, 0.04f, z},
+                             {1.4f, 0.08f, 1.4f}, {0.09f, 0.65f, 0.5f});
+                }
+            }
+        }
 
         for (const Enemy& enemy : enemies) {
             if (enemy.health <= 0) continue;
