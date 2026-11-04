@@ -417,6 +417,8 @@ out vec4 color;
 void main()
 {
     vec3 n = normalize(world_normal);
+    if (!gl_FrontFacing)
+        n = -n;
     vec3 baseColor = object_color;
 
     // Procedural brick pattern on vertical surfaces.
@@ -473,13 +475,13 @@ void main()
         vec3 fromEye = world_position - view_position;
         float eyeDistance = length(fromEye);
         vec3 rayDirection = normalize(fromEye);
-        float cone = smoothstep(0.90, 0.97,
+        float cone = smoothstep(0.65, 0.88,
                                 dot(rayDirection, flashlight_direction));
         float facing = max(dot(n, -rayDirection), 0.0);
-        float falloff = 1.0 / (1.0 + 0.12 * eyeDistance
-                                   + 0.04 * eyeDistance * eyeDistance);
+        float falloff = 1.0 / (1.0 + 0.04 * eyeDistance
+                                   + 0.01 * eyeDistance * eyeDistance);
         flashlight = baseColor * vec3(1.0, 0.93, 0.78)
-                     * cone * facing * falloff * 2.3;
+                     * cone * facing * falloff * 3.0;
     }
 
     color = vec4(ambient + direct + flashlight, 1.0);
