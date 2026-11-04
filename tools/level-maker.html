@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DOOM OpenGL · Level Maker</title>
+<style>
+:root { color-scheme:dark; font: 15px/1.45 system-ui,-apple-system,sans-serif; background:#10131a; color:#e6eaf3; }
+*{box-sizing:border-box}
+body{max-width:1100px;margin:30px auto;padding:0 18px}
+h1{font-size:24px;margin:0}
+p{color:#aab4c6;margin:7px 0 22px}
+.panel{background:#1b2130;border:1px solid #344056;border-radius:14px;padding:16px;margin:12px 0}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button,.button{cursor:pointer;background:#303b51;color:#f3f6fa;border:1px solid #56647e;padding:9px 12px;border-radius:8px;font:inherit}
+button:hover{background:#3d4b66}
+button.active{border-color:#89e1c0;background:#254e43}
+input[type=number]{background:#111924;border:1px solid #56647e;color:white;border-radius:7px;padding:8px;width:65px}
+input[type=text]{background:#111924;border:1px solid #56647e;color:white;border-radius:7px;padding:8px;width:220px}
+#grid{display:grid;width:max-content;max-width:100%;gap:1px;background:#0d1118;padding:6px;border-radius:8px;touch-action:none;user-select:none}
+.cell{width:26px;height:26px;display:grid;place-items:center;cursor:crosshair;color:#111822;font-weight:750;font-size:12px}
+.wall{background:#788598}.floor{background:#303849}.spawn{background:#53c99b}.door{background:#e7a651}.enemy{background:#e06060}.health{background:#73b8ed}.exit{background:#a48bfa}
+.scroll{overflow:auto;max-height:65vh}
+#status{min-height:22px;color:#92d8c2;font-size:13px}
+small{color:#aab4c6}
+</style>
+</head>
+<body>
+<h1>DOOM OpenGL · Level Maker</h1>
+<p>Simple offline editor for your team's levels. Paint tiles, save JSON, then open the file in the C++ game. Not a full 3D editor.</p>
+<div class="panel">
+  <div class="toolbar" id="palette"></div>
+</div>
+<div class="panel">
+ <div class="toolbar">
+  <label>Level name <input id="name" type="text" value="My Level"></label>
+  <label>Width <input id="width" type="number" min="6" max="64" value="16"></label>
+  <label>Height <input id="height" type="number" min="6" max="64" value="7"></label>
+  <button id="resize">Resize map</button>
+  <button id="blank">New blank map</button>
+  <button id="load">Open JSON…</button>
+  <button id="save">Export JSON</button>
+  <input id="file" type="file" accept=".json,application/json" hidden>
+ </div>
+ <p><small>Tip: Click and drag to paint. P = spawn, X = exit, D = interactive door, M = enemy, H = health pickup.</small></p>
+ <div class="scroll"><div id="grid" role="grid" aria-label="Level map"></div></div>
+ <p id="status" role="status"></p>
+</div>
+<script>
+const types=[
+ ['#','Wall','wall'],['.','Floor','floor'],['P','Spawn','spawn'],
+ ['D','Door','door'],['M','Enemy','enemy'],['H','Health','health'],['X','Exit','exit']
+];
+const bySymbol=Object.fromEntries(types.map(t=>[t[0],t]));
+const $=id=>document.getElementById(id);
+let brush='#', drawing=false, rows=[
+ '################','#P.....#......X#','#......#.......#',
+ '#..M...D...M...#','#......#.......#','#..H...#.......#','################'
+].map(r=>r.split(''));
+$('name').value='Mechanics Test Arena';
+
+function status(message, bad=false) {
+ $('status').textContent=message;
+ $('status').style.color=bad?'#ffa6a6':'#92d8c2';
+}
+function paint(x,y) {
+ if(!rows[y] || rows[y][x]===undefined) return;
+ if(brush==='P'||brush==='X') for(let j=0;j<rows.length;j++) for(let i=0;i<rows[0].length;i++) if(rows[j][i]===brush) rows[j][i]='.';
+ rows[y][x]=brush;
+ render();
+}
+function render() {
+ $('width').value=rows[0].length; $('height').value=rows.length;
+ const grid=$('grid');
+ grid.style.gridTemplateColumns='repeat('+rows[0].length+',26px)';
+ grid.replaceChildren();
+ rows.forEach((row,y)=>row.forEach((symbol,x)=>{
+  const tile=document.createElement('div');tile.className='cell '+bySymbol[symbol][2];
+  tile.textContent=symbol==='.'||symbol==='#'?'':symbol;
+  tile.title=x+','+y+' · '+bySymbol[symbol][1];
+  tile.onpointerdown=e=>{e.preventDefault();drawing=true;paint(x,y)};
+  tile.onpointerenter=()=>{if(drawing)paint(x,y)};
+  grid.append(tile);
+ }));
+}
+window.addEventListener('pointerup',()=>drawing=false);
+window.addEventListener('blur',()=>drawing=false);
+types.forEach(([symbol,label])=>{
+ const btn=document.createElement('button');
+ btn.textContent=symbol+' '+label;
+ btn.onclick=()=>{
+  brush=symbol;
+  document.querySelectorAll('#palette button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+ };
+ if(symbol===brush)btn.classList.add('active');
+ $('palette').append(btn);
+});
+
+function blank(w,h) {
+ rows=Array.from({length:h},(_,y)=>Array.from({length:w},(_,x)=>x===0||y===0||x===w-1||y===h-1?'#':'.'));
+ rows[1][1]='P'; rows[h-2][w-2]='X';
+ render();
+ status('New map created. Design the level, then export JSON.');
+}
+$('blank').onclick=()=>blank(+ $('width').value,+ $('height').value);
+$('resize').onclick=()=>{
+ const w=+ $('width').value,h=+ $('height').value;
+ if(!Number.isInteger(w)||!Number.isInteger(h)||w<6||h<6||w>64||h>64){status('Size must be 6–64 tiles in each direction.',true);return}
+ const old=rows;
+ rows=Array.from({length:h},(_,y)=>Array.from({length:w},(_,x)=>old[y]?.[x]??'.'));
+ render();status('Map resized. Check the boundaries, spawn, and exit.');
+};
+function validate(tiles){
+ if(!Array.isArray(tiles)||tiles.length<3||tiles.length>128||!tiles.every(s=>typeof s==='string'&&s.length===tiles[0].length&&s.length>=3&&s.length<=128&&[...s].every(c=>bySymbol[c]))) return 'Invalid grid shape or unsupported tile symbols.';
+ const flat=tiles.join('');
+ if(flat.split('P').length!==2||flat.split('X').length!==2) return 'Each level needs exactly one P spawn and one X exit.';
+ return null;
+}
+$('save').onclick=()=>{
+ const tiles=rows.map(r=>r.join(''));
+ const error=validate(tiles);
+ if(error){status(error,true);return}
+ const data=JSON.stringify({name:$('name').value.trim()||'Untitled',tiles},null,2)+'\n';
+ const url=URL.createObjectURL(new Blob([data],{type:'application/json'}));
+ const a=document.createElement('a');a.href=url;a.download=($('name').value.toLowerCase().replace(/[^a-z0-9]+/g,'_')||'level')+'.json';a.click();
+ setTimeout(()=>URL.revokeObjectURL(url),500);
+ status('JSON exported. Put the file in assets/levels/ and pass its path to the game.');
+};
+$('load').onclick=()=>$('file').click();
+$('file').onchange=async e=>{
+ const file=e.target.files[0];if(!file)return;
+ try {
+  const data=JSON.parse(await file.text());
+  const error=validate(data.tiles);if(error)throw Error(error);
+  rows=data.tiles.map(s=>s.split(''));$('name').value=String(data.name||'Imported Level');
+  render();status('Loaded '+file.name);
+ }catch(error){status(error.message,true)}
+ e.target.value='';
+};
+render();status('Testing arena loaded. Export it as JSON or create your own map.');
+</script>
+</body>
+</html>
