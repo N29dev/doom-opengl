@@ -108,10 +108,23 @@ Perspective FPS camera, OpenGL VAO/VBO meshes, shader-based procedural brick/til
 materials, basic diffuse and ambient lighting, flashlight cone, 2D HUD,
 and 320×180 retro pixel framebuffer.
 
+## Procedural retro models
+
+The model update uses the existing cube VAO with independently transformed parts
+and solid-color materials. No Blender assets or new runtime libraries are required.
+The three enemy types (M normal, F flying, B heavy), medkit (H), shotgun pickup (S),
+doors and projectiles have new models. The pistol and shotgun use a separate 3D
+camera-space weapon pass, with recoil, reload and movement bob. Enemy leg movement
+and wing flapping are visual only; hitboxes and gameplay remain unchanged.
+
+Test both levels: look at each enemy, shoot it, pick up the medkit/shotgun, switch
+weapons, reload, toggle doors, and walk/slide/jump. Verify that both levels are
+present in the assets/levels directory before starting the game.
+
 ## Team TODO (deliberately unfinished)
 
-- Design your own levels, artwork, textures, and models
-- Enemy AI, pathfinding, animation, and additional enemies
+- Design additional levels, artwork and textures
+- More advanced enemy AI, pathfinding, and additional enemies
 - More sophisticated weapons, sound, and objectives
 - Graphics/debug views, visual polishing, performance optimization
 - Final report, demo, and exam presentation
@@ -119,6 +132,7 @@ and 320×180 retro pixel framebuffer.
 ## Code layout
 
 - `src/main.cpp`: current gameplay loop and rendering foundation
+- `src/Models.hpp`: procedural model geometry, materials and visual animation
 - `src/Level.hpp`, `src/Level.cpp`: validated JSON level loading, tiles, collision, doors, pickups
 - `tools/level-maker.html`: simple browser-based grid editor (no game dependency)
 - `tools/validate_levels.cpp`: native C++ command-line validator, sharing `Level::load()` with the game
