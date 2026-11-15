@@ -163,12 +163,15 @@ namespace {
         float vocalTimer = 1.0f;
         float footstepDistance = 0.0f;
         float painSoundCooldown = 0.0f;
+        bool boss = false;
+        bool enraged = false;
     };
 
     struct Projectile {
         Vec3 position;
         Vec3 velocity;
         float lifetime;
+        int damage = 35;
     };
 
     Level level;
@@ -176,7 +179,9 @@ namespace {
     std::vector<Enemy> enemies;
     std::vector<Projectile> projectiles;
     std::filesystem::path campaignDirectory;
-    int currentLevelNumber = 0; // 0 = standalone custom/test level, 1..3 = campaign
+    constexpr int campaignLevels = 4;
+    constexpr int bossHealth = 650;
+    int currentLevelNumber = 0; // 0 = standalone custom/test level
     bool gameWon = false;
     bool interactKeyHeld = false;
     bool restartKeyHeld = false;
@@ -229,7 +234,11 @@ namespace {
         }
         for (const GridPosition pos : level.positions('B')) {
             enemies.push_back({ {level.worldX(pos.column), level.surfaceAt(pos.column, pos.row) + 1.5f, level.worldZ(pos.row)},
-                                {1.8f, 3.0f, 1.8f}, 1000, false, true, 0.0f });
+                                {1.8f, 3.0f, 1.8f}, currentLevelNumber==campaignLevels?bossHealth:1000, false, true, 0.0f });
+            if (currentLevelNumber==campaignLevels) {
+                enemies.back().boss=true;
+                enemies.back().projectileCooldown=2.0f;
+            }
         }
         for (std::size_t i=0;i<enemies.size();++i) {
             auto& enemy=enemies[i];
@@ -478,14 +487,36 @@ namespace {
                 }
                 continue;
             }
+            if (enemy.boss) {
+                if (!enemy.enraged && enemy.health <= bossHealth/2) {
+                    enemy.enraged = true;
+                    enemy.projectileCooldown = 0.7f;
+                    play_enemy_sound(audio::Sound::HeavyGrowl,enemy);
+                    std::cout << "The Titan is enraged!\n";
+                }
+                enemy.projectileCooldown -= deltaTime;
+                if (enemy.projectileCooldown <= 0.0f && distance < 27.0f) {
+                    const Vec3 origin=enemy.position+Vec3{0.0f,0.35f,0.0f};
+                    const Vec3 aim=normalize(camera.position-origin);
+                    const int spread=enemy.enraged?1:0;
+                    for (int i=-spread;i<=spread;++i) {
+                        const float angle=i*0.20f;
+                        const Vec3 direction{aim.x*std::cos(angle)-aim.z*std::sin(angle),aim.y,
+                                             aim.x*std::sin(angle)+aim.z*std::cos(angle)};
+                        projectiles.push_back({origin,direction*(enemy.enraged?7.0f:5.5f),6.0f,18});
+                    }
+                    enemy.projectileCooldown=enemy.enraged?1.55f:2.65f;
+                    play_enemy_sound(audio::Sound::HeavyAttack,enemy);
+                }
+            }
             const Vec3 beforeMove = enemy.position;
-            if (distance > 1.2f && distance < 9.0f) {
-                const float enemySpeed = enemy.heavy ? 0.7f : 2.4f;
+            if (distance > (enemy.boss?1.7f:1.2f) && distance < (enemy.boss?32.0f:9.0f)) {
+                const float enemySpeed = enemy.boss ? (enemy.enraged?1.65f:1.0f) : enemy.heavy ? 0.7f : 2.4f;
                 const float stepX = dx / distance * (enemySpeed * deltaTime);
                 const float stepZ = dz / distance * (enemySpeed * deltaTime);
                 const float feet = enemy.position.y - enemy.size.y * 0.5f;
                 const auto canMove = [&](float x, float z) {
-                    if (!level.hasPlatforming()) return !level.circleBlocked(x,z,0.42f);
+                    if (!level.hasPlatforming()) return !level.circleBlocked(x,z,enemy.boss?0.85f:0.42f);
                     float support = 0.0f;
                     return !level.bodyBlocked(x,z,0.42f,feet,feet + enemy.size.y) &&
                            level.landingHeight(x,z,0.12f,feet + 0.005f,feet - 0.005f,support);
@@ -507,11 +538,12 @@ namespace {
             enemy.walkAmount += (moving - enemy.walkAmount) * std::min(1.0f, deltaTime * 10.0f);
             const float closeX = camera.position.x - enemy.position.x;
             const float closeZ = camera.position.z - enemy.position.z;
-            if (damageCooldown <= 0.0f && closeX * closeX + closeZ * closeZ < 1.2f * 1.2f &&
+            const float contactRange = enemy.boss ? 1.85f : 1.2f;
+            if (damageCooldown <= 0.0f && closeX * closeX + closeZ * closeZ < contactRange * contactRange &&
                 (!level.hasPlatforming() || (camera.position.y - playerEyeHeight < enemy.position.y + enemy.size.y * 0.5f &&
                  camera.position.y - playerEyeHeight + playerBodyHeight > enemy.position.y - enemy.size.y * 0.5f))) {
                 play_enemy_sound(enemy.heavy?audio::Sound::HeavyAttack:audio::Sound::DemonAttack,enemy);
-                const int contactDamage = enemy.heavy ? 45 : 10;
+                const int contactDamage = enemy.boss ? 25 : enemy.heavy ? 45 : 10;
                 playerHealth = std::max(0, playerHealth - contactDamage);
                 damageCooldown = 1.0f;
                 audio::play(playerHealth == 0 ? audio::Sound::Death : audio::Sound::Hurt);
@@ -525,7 +557,7 @@ namespace {
         for (Projectile& projectile : projectiles) {
             projectile.position = projectile.position + projectile.velocity * deltaTime;
             projectile.lifetime -= deltaTime;
-            if (level.hasPlatforming() && level.bodyBlocked(projectile.position.x, projectile.position.z, 0.10f,
+            if (level.bodyBlocked(projectile.position.x, projectile.position.z, 0.10f,
                     projectile.position.y - 0.1f, projectile.position.y + 0.1f)) {
                 projectile.lifetime = 0.0f;
                 continue;
@@ -534,11 +566,11 @@ namespace {
             const float dy = camera.position.y - projectile.position.y;
             const float dz = camera.position.z - projectile.position.z;
             if (dx * dx + dy * dy + dz * dz < 0.55f * 0.55f && damageCooldown <= 0.0f) {
-                playerHealth = std::max(0, playerHealth - 35);
+                playerHealth = std::max(0, playerHealth - projectile.damage);
                 projectile.lifetime = 0.0f;
                 damageCooldown = 0.4f;
                 audio::play(playerHealth == 0 ? audio::Sound::Death : audio::Sound::Hurt);
-                std::cout << "Flying enemy projectile hit you for 35 damage.\n";
+                std::cout << "Enemy projectile hit you for " << projectile.damage << " damage.\n";
                 if (playerHealth == 0) {
                     std::cout << "You died. Press T to restart.\n";
                     glfwSetWindowTitle(window, "YOU DIED - press T to restart");
@@ -566,7 +598,7 @@ namespace {
         }
         exitWasTouched = atExit;
         if (playerHealth > 0 && atExit && remaining == 0) {
-            if (currentLevelNumber >= 1 && currentLevelNumber < 3) {
+            if (currentLevelNumber >= 1 && currentLevelNumber < campaignLevels) {
                 const int nextNumber = currentLevelNumber + 1;
                 const auto nextFile = campaignDirectory / ("level" + std::to_string(nextNumber) + ".json");
                 std::string loadError;
@@ -578,14 +610,14 @@ namespace {
                     currentLevelNumber = nextNumber;
                     reset_game();
                     audio::play(audio::Sound::Finish);
-                    const std::string title = "DOOM OpenGL | Level " + std::to_string(currentLevelNumber) + " / 3";
+                    const std::string title = "DOOM OpenGL | Level " + std::to_string(currentLevelNumber) + " / " + std::to_string(campaignLevels);
                     std::cout << title << '\n';
                     glfwSetWindowTitle(window, title.c_str());
                 }
             } else {
                 gameWon = true;
                 audio::play(audio::Sound::Finish);
-                const char* title = currentLevelNumber == 3 ? "CAMPAIGN COMPLETE - press T to restart level" : "LEVEL COMPLETE - press T to restart";
+                const char* title = currentLevelNumber == campaignLevels ? "CAMPAIGN COMPLETE - press T to restart level" : "LEVEL COMPLETE - press T to restart";
                 std::cout << title << '\n';
                 glfwSetWindowTitle(window, title);
             }
@@ -1162,8 +1194,17 @@ void main() { color = vec4(ray_color, 1.0); }
         hud.rectangle(0.0f,0.9f,1.0f,0.17f,{0.07f,0.075f,0.09f});
         const std::string objective = remaining == 0 ? "EXIT OPEN" : "ENEMIES " + std::to_string(remaining) + "/" + std::to_string(enemies.size());
         hud.text(0.0f,0.945f,objective,remaining==0?green:amber,1.0f,true);
-        if (currentLevelNumber > 0) hud.text(-0.95f,0.95f,"LEVEL "+std::to_string(currentLevelNumber)+"/3",white);
+        if (currentLevelNumber > 0) hud.text(-0.95f,0.95f,"LEVEL "+std::to_string(currentLevelNumber)+"/"+std::to_string(campaignLevels),white);
         if (audio::muted()) hud.text(0.69f,0.95f,"MUTED",amber);
+        for (const Enemy& enemy : enemies) {
+            if (!enemy.boss || enemy.health <= 0 || playerHealth <= 0 || gameWon) continue;
+            const float ratio=std::clamp(static_cast<float>(enemy.health)/bossHealth,0.0f,1.0f);
+            hud.rectangle(0,0.675f,1.24f,0.25f,{0.08f,0.07f,0.09f});
+            hud.text(0,0.77f,enemy.enraged?"TITAN - ENRAGED":"THE TITAN",enemy.enraged?red:amber,1.0f,true);
+            hud.rectangle(0,0.615f,1.05f,0.045f,{0.24f,0.07f,0.08f});
+            hud.rectangle(-0.525f*(1.0f-ratio),0.615f,1.05f*ratio,0.045f,enemy.enraged?red:amber);
+            break;
+        }
         if (exitNotice > 0.0f && remaining > 0 && playerHealth > 0) {
             hud.rectangle(0,0.30f,1.30f,0.30f,{0.11f,0.035f,0.035f});
             hud.text(0,0.42f,"EXIT LOCKED",red,1.5f,true);
@@ -1171,7 +1212,7 @@ void main() { color = vec4(ray_color, 1.0); }
         }
         if (gameWon || playerHealth == 0) {
             hud.rectangle(0,0.2f,1.55f,0.36f,{0.08f,0.065f,0.08f});
-            hud.text(0,0.30f,playerHealth==0?"YOU DIED":currentLevelNumber==3?"CAMPAIGN COMPLETE":"LEVEL COMPLETE",playerHealth==0?red:green,1.5f,true);
+            hud.text(0,0.30f,playerHealth==0?"YOU DIED":currentLevelNumber==campaignLevels?"CAMPAIGN COMPLETE":"LEVEL COMPLETE",playerHealth==0?red:green,1.5f,true);
             hud.text(0,0.09f,"PRESS T TO RESTART",white,1.0f,true);
         }
 
@@ -1268,6 +1309,7 @@ static int run_game(int argc, char** argv) {
     if (stem == "level1") currentLevelNumber = 1;
     else if (stem == "level2") currentLevelNumber = 2;
     else if (stem == "level3") currentLevelNumber = 3;
+    else if (stem == "level4") currentLevelNumber = 4;
     else currentLevelNumber = 0;
     std::string loadError;
     if (!initialLevel.load(levelFile, loadError)) {
@@ -1578,7 +1620,7 @@ static int run_game(int argc, char** argv) {
             if (enemy.health <= 0) continue;
             const Vec3 toward = camera.position - enemy.position;
             const float facing = std::atan2(toward.x, toward.z);
-            const float maxHealth = enemy.heavy ? 1000.0f : (enemy.flying ? 120.0f : 180.0f);
+            const float maxHealth = enemy.boss ? static_cast<float>(bossHealth) : enemy.heavy ? 1000.0f : (enemy.flying ? 120.0f : 180.0f);
             const float health = std::clamp(enemy.health / maxHealth, 0.0f, 1.0f);
             if (enemy.heavy)
                 draw_heavy_model(program, vao, enemy.position, facing, health, enemy.walkPhase, enemy.walkAmount);

@@ -84,7 +84,7 @@ set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT doom_opengl)
 
 # Support launching from the build directory as well as the repository root.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/assets/levels")
-foreach(level_file IN ITEMS level1.json level2.json level3.json test_arena.json platforming.json)
+foreach(level_file IN ITEMS level1.json level2.json level3.json level4.json test_arena.json platforming.json)
     configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/levels/${level_file}"
         "${CMAKE_CURRENT_BINARY_DIR}/assets/levels/${level_file}"
