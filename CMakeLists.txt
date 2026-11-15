@@ -76,3 +76,8 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/assets/levels/test_arena.json"
     COPYONLY
 )
+configure_file(
+	"${CMAKE_CURRENT_SOURCE_DIR}/assets/levels/level2.json"
+	"${CMAKE_CURRENT_BINARY_DIR}/assets/levels/level2.json"
+	COPYONLY
+)

@@ -58,7 +58,7 @@ bool Level::load(const std::string& filePath, std::string& error) {
             }
             for (int column = 0; column < newWidth; ++column) {
                 const char tile = line[column];
-                if (std::string("#.PDMHX").find(tile) == std::string::npos) {
+                if (std::string("#.PDMHSFBX").find(tile) == std::string::npos) {
                     error = "Unknown tile character at row " + std::to_string(row);
                     return false;
                 }
@@ -115,6 +115,7 @@ bool Level::load(const std::string& filePath, std::string& error) {
         spawn_ = newSpawn;
         openDoors_.assign(width() * height(), false);
         collectedHealth_.assign(width() * height(), false);
+        collectedShotgun_.assign(width() * height(), false);
         error.clear();
         return true;
     } catch (const nlohmann::json::exception& e) {
@@ -144,9 +145,26 @@ bool Level::isHealthCollected(int column, int row) const {
     return tileAt(column, row) == 'H' && collectedHealth_[index(column, row)];
 }
 
+bool Level::isShotgunCollected(int column, int row) const {
+    return tileAt(column, row) == 'S' && collectedShotgun_[index(column, row)];
+}
+
 bool Level::isSolid(int column, int row) const {
     const char tile = tileAt(column, row);
     return tile == '#' || (tile == 'D' && !isDoorOpen(column, row));
+}
+
+bool Level::collectNearbyShotgun(float x, float z) {
+    for (int row = 0; row < height(); ++row) {
+        for (int column = 0; column < width(); ++column) {
+            if (tileAt(column, row) != 'S' || isShotgunCollected(column, row)) continue;
+            if (near(x, z, worldX(column), worldZ(row), 1.0f)) {
+                collectedShotgun_[index(column, row)] = true;
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 bool Level::circleBlocked(float x, float z, float radius) const {

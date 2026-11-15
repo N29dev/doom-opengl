@@ -5,7 +5,8 @@
 
 // Small, renderer-independent grid format. Each tile is 2x2 world units.
 // '#' wall, '.' floor, 'P' player, 'D' door, 'M' enemy,
-// 'H' health pickup, 'X' exit.
+// 'H' health pickup, 'S' shotgun pickup, 'F' flying enemy,
+// 'B' big blue enemy, 'X' exit.
 struct GridPosition {
     int column = 0;
     int row = 0;
@@ -28,10 +29,12 @@ public:
 
     bool isDoorOpen(int column, int row) const;
     bool isHealthCollected(int column, int row) const;
+    bool isShotgunCollected(int column, int row) const;
     bool isSolid(int column, int row) const;
     bool circleBlocked(float worldX, float worldZ, float radius) const;
     bool toggleNearbyDoor(float worldX, float worldZ);
     bool collectNearbyHealth(float worldX, float worldZ);
+    bool collectNearbyShotgun(float worldX, float worldZ);
     bool reachedExit(float worldX, float worldZ) const;
 
     std::vector<GridPosition> positions(char symbol) const;
@@ -42,5 +45,6 @@ private:
     std::vector<std::string> tiles_;
     std::vector<bool> openDoors_;
     std::vector<bool> collectedHealth_;
+    std::vector<bool> collectedShotgun_;
     GridPosition spawn_;
 };
