@@ -121,6 +121,22 @@ namespace {
         }
     } camera;
 
+    struct DisplaySettings {
+        bool fullscreen = false;
+        int windowPreset = 1;
+        int renderPreset = 0;
+        bool vsync = true;
+        bool paused = false;
+        int row = 0;
+        int windowX = 80, windowY = 80;
+        double mx = -1, my = -1;
+    } settings;
+    constexpr std::array<std::array<int,2>,5> windowSizes{{{960,540},{1280,720},{1600,900},{1920,1080},{2560,1440}}};
+    constexpr std::array<int,6> renderHeights{{180,360,540,720,1080,0}};
+    constexpr std::array<const char*,6> renderNames{{"RETRO 180P","360P","540P","720P","1080P","NATIVE"}};
+    constexpr int menuRows = 8;
+    float menu_row_y(int row) { return 0.43f - static_cast<float>(row)*0.19f; }
+
     bool firstMouse = true;
     bool flashlightEnabled = false;
     bool flashlightKeyHeld = false;
@@ -217,7 +233,7 @@ namespace {
         audio::play(audio::Sound::Switch);
     }
     void scroll_callback(GLFWwindow*, double, double y) {
-        if (y != 0.0) pendingScroll = y > 0.0 ? 1 : -1;
+        if (!settings.paused && y != 0.0) pendingScroll = y > 0.0 ? 1 : -1;
     }
 
     void reset_game() {
@@ -278,6 +294,7 @@ namespace {
     void fire_weapon();
 
     void mouse_callback(GLFWwindow*, double x, double y) {
+        if (settings.paused) return;
         if (firstMouse) {
             mouseX = x;
             mouseY = y;
@@ -295,9 +312,106 @@ namespace {
         mouseY = y;
     }
 
+    void update_window_mode(GLFWwindow* window, bool fullscreen) {
+        if (fullscreen == settings.fullscreen) return;
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        if (!monitor) return;
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        if (!mode) return;
+        if (fullscreen) {
+            glfwGetWindowPos(window,&settings.windowX,&settings.windowY);
+            settings.fullscreen = true;
+            glfwSetWindowMonitor(window,monitor,0,0,mode->width,mode->height,mode->refreshRate);
+        } else {
+            settings.fullscreen = false;
+            const auto size=windowSizes[settings.windowPreset];
+            glfwSetWindowMonitor(window,nullptr,settings.windowX,settings.windowY,size[0],size[1],GLFW_DONT_CARE);
+        }
+        glfwSwapInterval(settings.vsync?1:0);
+        firstMouse=true;
+    }
+
+    void set_paused(GLFWwindow* window,bool paused) {
+        settings.paused=paused;
+        settings.mx=settings.my=-1;
+        pendingScroll=0;
+        glfwSetInputMode(window,GLFW_CURSOR,paused?GLFW_CURSOR_NORMAL:GLFW_CURSOR_DISABLED);
+        firstMouse=true;
+        if (!paused) {
+            previousFirePressed=glfwGetMouseButton(window,GLFW_MOUSE_BUTTON_LEFT)==GLFW_PRESS;
+            previousSpacePressed=glfwGetKey(window,GLFW_KEY_SPACE)==GLFW_PRESS;
+            previousSlidePressed=glfwGetKey(window,GLFW_KEY_LEFT_CONTROL)==GLFW_PRESS;
+            reloadKeyHeld=glfwGetKey(window,GLFW_KEY_R)==GLFW_PRESS;
+            qHeld=glfwGetKey(window,GLFW_KEY_Q)==GLFW_PRESS;
+            interactKeyHeld=glfwGetKey(window,GLFW_KEY_E)==GLFW_PRESS;
+            restartKeyHeld=glfwGetKey(window,GLFW_KEY_T)==GLFW_PRESS;
+            muteHeld=glfwGetKey(window,GLFW_KEY_M)==GLFW_PRESS;
+            flashlightKeyHeld=glfwGetKey(window,GLFW_KEY_F)==GLFW_PRESS;
+        }
+    }
+
+    void menu_action(GLFWwindow* window,int direction,bool activate) {
+        switch(settings.row) {
+            case 0: if(activate) set_paused(window,false); break;
+            case 1: update_window_mode(window,!settings.fullscreen); break;
+            case 2:
+                if(!settings.fullscreen) {
+                    settings.windowPreset=(settings.windowPreset+direction+static_cast<int>(windowSizes.size()))%static_cast<int>(windowSizes.size());
+                    const auto size=windowSizes[settings.windowPreset];
+                    glfwSetWindowSize(window,size[0],size[1]);
+                }
+                break;
+            case 3:
+                settings.renderPreset=(settings.renderPreset+direction+static_cast<int>(renderHeights.size()))%static_cast<int>(renderHeights.size());
+                break;
+            case 4: settings.vsync=!settings.vsync; glfwSwapInterval(settings.vsync?1:0); break;
+            case 5: audio::toggleMute(); break;
+            case 6: if(activate) { reset_game(); set_paused(window,false); } break;
+            case 7: if(activate) glfwSetWindowShouldClose(window,GLFW_TRUE); break;
+        }
+    }
+
+    // Returns true whenever gameplay should be frozen for this frame.
+    bool settings_input(GLFWwindow* window) {
+        static std::array<bool,7> held{};
+        constexpr std::array<int,7> keys{{GLFW_KEY_ESCAPE,GLFW_KEY_F11,GLFW_KEY_UP,GLFW_KEY_DOWN,GLFW_KEY_LEFT,GLFW_KEY_RIGHT,GLFW_KEY_ENTER}};
+        std::array<bool,7> pressed{};
+        for(std::size_t i=0;i<keys.size();++i) {
+            const bool down=glfwGetKey(window,keys[i])==GLFW_PRESS;
+            pressed[i]=down&&!held[i];held[i]=down;
+        }
+        static bool clickHeld=false;
+        const bool clickDown=glfwGetMouseButton(window,GLFW_MOUSE_BUTTON_LEFT)==GLFW_PRESS;
+        const bool click=clickDown&&!clickHeld;clickHeld=clickDown;
+        if(pressed[1]) update_window_mode(window,!settings.fullscreen);
+        if(pressed[0]) {
+            set_paused(window,!settings.paused);
+            return true;
+        }
+        if(!settings.paused) return false;
+        int w=0,h=0;glfwGetWindowSize(window,&w,&h);
+        double x=0,y=0;glfwGetCursorPos(window,&x,&y);
+        int hovered=-1;
+        float nx=0;
+        if(w>0&&h>0) {
+            nx=static_cast<float>(2*x/w-1);
+            const float ny=static_cast<float>(1-2*y/h);
+            if(std::abs(nx)<=0.78f)
+                for(int i=0;i<menuRows;++i)
+                    if(std::abs(ny-menu_row_y(i))<0.085f) hovered=i;
+        }
+        if(hovered>=0&&(std::abs(x-settings.mx)>0.5||std::abs(y-settings.my)>0.5)) settings.row=hovered;
+        settings.mx=x;settings.my=y;
+        if(pressed[2])settings.row=(settings.row+menuRows-1)%menuRows;
+        if(pressed[3])settings.row=(settings.row+1)%menuRows;
+        if(pressed[4])menu_action(window,-1,false);
+        else if(pressed[5])menu_action(window,1,false);
+        else if(pressed[6])menu_action(window,1,true);
+        else if(click&&hovered>=0){settings.row=hovered;menu_action(window,nx<0?-1:1,true);}
+        return true;
+    }
+
     void input(GLFWwindow* window, float deltaTime) {
-        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-            glfwSetWindowShouldClose(window, GLFW_TRUE);
 
         const bool restartPressed = glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS;
         if (restartPressed && !restartKeyHeld) {
@@ -1191,18 +1305,18 @@ void main() { color = vec4(ray_color, 1.0); }
         glDisable(GL_DEPTH_TEST);
         const Vec3 white{0.90f,0.91f,0.88f}, amber{1.0f,0.67f,0.25f}, green{0.25f,1.0f,0.50f}, red{1.0f,0.24f,0.19f};
         const int remaining = enemies_remaining();
-        hud.rectangle(0.0f,0.9f,1.0f,0.17f,{0.07f,0.075f,0.09f});
+        hud.rectangle(0.0f,0.925f,0.72f,0.106f,{0.07f,0.075f,0.09f});
         const std::string objective = remaining == 0 ? "EXIT OPEN" : "ENEMIES " + std::to_string(remaining) + "/" + std::to_string(enemies.size());
-        hud.text(0.0f,0.945f,objective,remaining==0?green:amber,1.0f,true);
-        if (currentLevelNumber > 0) hud.text(-0.95f,0.95f,"LEVEL "+std::to_string(currentLevelNumber)+"/"+std::to_string(campaignLevels),white);
-        if (audio::muted()) hud.text(0.69f,0.95f,"MUTED",amber);
+        hud.text(0.0f,0.957f,objective,remaining==0?green:amber,0.82f,true);
+        if (currentLevelNumber > 0) hud.text(-0.95f,0.95f,"LEVEL "+std::to_string(currentLevelNumber)+"/"+std::to_string(campaignLevels),white,0.82f);
+        if (audio::muted()) hud.text(0.76f,0.95f,"MUTED",amber,0.82f);
         for (const Enemy& enemy : enemies) {
             if (!enemy.boss || enemy.health <= 0 || playerHealth <= 0 || gameWon) continue;
             const float ratio=std::clamp(static_cast<float>(enemy.health)/bossHealth,0.0f,1.0f);
-            hud.rectangle(0,0.675f,1.24f,0.25f,{0.08f,0.07f,0.09f});
-            hud.text(0,0.77f,enemy.enraged?"TITAN - ENRAGED":"THE TITAN",enemy.enraged?red:amber,1.0f,true);
-            hud.rectangle(0,0.615f,1.05f,0.045f,{0.24f,0.07f,0.08f});
-            hud.rectangle(-0.525f*(1.0f-ratio),0.615f,1.05f*ratio,0.045f,enemy.enraged?red:amber);
+            hud.rectangle(0,0.77f,0.86f,0.16f,{0.08f,0.07f,0.09f});
+            hud.text(0,0.835f,enemy.enraged?"TITAN - ENRAGED":"THE TITAN",enemy.enraged?red:amber,0.82f,true);
+            hud.rectangle(0,0.72f,0.76f,0.025f,{0.24f,0.07f,0.08f});
+            hud.rectangle(-0.38f*(1.0f-ratio),0.72f,0.76f*ratio,0.025f,enemy.enraged?red:amber);
             break;
         }
         if (exitNotice > 0.0f && remaining > 0 && playerHealth > 0) {
@@ -1216,53 +1330,34 @@ void main() { color = vec4(ray_color, 1.0); }
             hud.text(0,0.09f,"PRESS T TO RESTART",white,1.0f,true);
         }
 
-        constexpr float barX = -0.69f;
-        constexpr float barY = -0.84f;
-        constexpr float barWidth = 0.48f;
-        constexpr float barHeight = 0.09f;
-        const float healthRatio = std::clamp(playerHealth / 100.0f, 0.0f, 1.0f);
+        // Compact bottom corners, preserving the middle of the screen for aiming.
+        constexpr float barX=-0.79f,barY=-0.88f,barWidth=0.32f,barHeight=0.055f;
+        const float healthRatio=std::clamp(playerHealth/100.0f,0.0f,1.0f);
+        hud.rectangle(barX,barY,barWidth,barHeight,{0.12f,0.03f,0.03f});
+        if(healthRatio>0.0f)hud.rectangle(barX-barWidth*(1-healthRatio)*0.5f,barY,barWidth*healthRatio,barHeight*0.6f,
+            healthRatio>0.3f?Vec3{0.18f,0.85f,0.18f}:red);
+        hud.text(-0.95f,-0.79f,"HP "+std::to_string(playerHealth),white,0.82f);
 
-        hud.rectangle(barX, barY, barWidth, barHeight, { 0.12f, 0.03f, 0.03f });
-        if (healthRatio > 0.0f) {
-            hud.rectangle(
-                barX - barWidth * (1.0f - healthRatio) * 0.5f,
-                barY, barWidth * healthRatio, barHeight * 0.55f,
-                healthRatio > 0.3f ? Vec3{ 0.18f, 0.85f, 0.18f } : Vec3{ 0.95f, 0.12f, 0.08f }
-            );
-        }
+        hud.rectangle(0,0,0.025f,0.006f,{1.0f,0.86f,0.62f});
+        hud.rectangle(0,0,0.006f,0.025f,{1.0f,0.86f,0.62f});
 
-        hud.rectangle(0.0f, 0.0f, 0.035f, 0.008f, { 1.0f, 0.86f, 0.62f });
-        hud.rectangle(0.0f, 0.0f, 0.008f, 0.035f, { 1.0f, 0.86f, 0.62f });
-
-        hud.text(-0.92f,-0.70f,"HP "+std::to_string(playerHealth),white);
-
-        // Both weapon slots stay visible. Active slot gets an amber outline; locked is dim.
         const Vec3 muted{0.50f,0.52f,0.56f}, panel{0.07f,0.08f,0.10f};
-        for (int weapon=1;weapon<=2;++weapon) {
-            const float x=weapon==1?0.13f:0.68f;
-            const bool unlocked=weapon==1 || shotgunUnlocked;
-            const bool active=selectedWeapon==weapon;
+        for(int weapon=1;weapon<=2;++weapon) {
+            const float x=weapon==1?0.38f:0.77f;
+            const bool unlocked=weapon==1||shotgunUnlocked,active=selectedWeapon==weapon;
             const Vec3 edge=active?amber:unlocked?Vec3{0.31f,0.35f,0.40f}:Vec3{0.20f,0.21f,0.25f};
-            hud.rectangle(x,-0.745f,0.52f,0.34f,edge);
-            hud.rectangle(x,-0.745f,0.495f,0.307f,panel);
-            hud.text(x,-0.60f,weapon==1?"1 PISTOL":"2 SHOTGUN",active?amber:unlocked?white:muted,1.0f,true);
-            const Vec3 iconColor=unlocked?Vec3{0.62f,0.67f,0.73f}:Vec3{0.27f,0.29f,0.32f};
-            if (weapon==1) {
-                hud.rectangle(x,-0.725f,0.16f,0.028f,iconColor);
-                hud.rectangle(x-0.048f,-0.752f,0.034f,0.055f,iconColor);
-            } else {
-                hud.rectangle(x+0.028f,-0.727f,0.22f,0.025f,iconColor);
-                hud.rectangle(x-0.10f,-0.745f,0.075f,0.035f,unlocked?Vec3{0.55f,0.33f,0.15f}:iconColor);
-            }
+            hud.rectangle(x,-0.80f,0.37f,0.225f,edge);
+            hud.rectangle(x,-0.80f,0.352f,0.205f,panel);
+            hud.text(x,-0.704f,weapon==1?"1 PISTOL":"2 SHOTGUN",active?amber:unlocked?white:muted,0.81f,true);
             const std::string ammo=weapon==1?std::to_string(pistolAmmo)+"/10":std::to_string(shotgunAmmo)+"/2";
-            hud.text(x,-0.80f,unlocked?ammo:"LOCKED",unlocked?white:muted,1.0f,true);
-            if (active) {
-                hud.rectangle(x,-0.895f,0.48f,0.025f,{0.14f,0.12f,0.09f});
-                const float ratio=reloadTimer>0.0f?1.0f-reloadTimer/reloadDuration:1.0f;
-                if(ratio>0.0f)hud.rectangle(x-0.24f*(1.0f-ratio),-0.895f,0.48f*ratio,0.025f,amber);
+            hud.text(x,-0.815f,unlocked?ammo:"LOCKED",unlocked?white:muted,0.80f,true);
+            if(active&&reloadTimer>0.0f) {
+                const float ratio=1.0f-reloadTimer/reloadDuration;
+                hud.rectangle(x,-0.897f,0.33f,0.015f,{0.14f,0.12f,0.09f});
+                if(ratio>0.0f)hud.rectangle(x-0.165f*(1.0f-ratio),-0.897f,0.33f*ratio,0.015f,amber);
             }
         }
-        hud.text(0.405f,-0.93f,shotgunUnlocked?"Q / SCROLL TO SWAP":"FIND THE SHOTGUN",muted,1.0f,true);
+        hud.text(0.575f,-0.929f,shotgunUnlocked?"Q / SCROLL TO SWAP":"FIND THE SHOTGUN",muted,0.8f,true);
         if (playerHealth>0 && !gameWon && exitNotice<=0.0f) {
             if (weaponPickupNotice>0.0f) {
                 hud.rectangle(0,-0.34f,1.45f,0.24f,panel);
@@ -1274,6 +1369,30 @@ void main() { color = vec4(ray_color, 1.0); }
             }
         }
 
+        glEnable(GL_DEPTH_TEST);
+    }
+
+    void draw_settings(const HudRenderer& hud,int pixelWidth,int pixelHeight) {
+        glDisable(GL_DEPTH_TEST);
+        const Vec3 white{0.91f,0.89f,0.86f},amber{1.0f,0.67f,0.25f},dim{0.56f,0.59f,0.64f};
+        hud.rectangle(0,0,2.0f,2.0f,{0.045f,0.042f,0.052f});
+        hud.text(0,0.89f,"PAUSED",amber,1.75f,true);
+        hud.text(0,0.68f,"SETTINGS",dim,1.0f,true);
+        const auto size=windowSizes[settings.windowPreset];
+        const std::array<std::string,menuRows> labels{{"RESUME","DISPLAY MODE","WINDOW SIZE","RENDER RES","VSYNC","SOUND","RESTART LEVEL","QUIT GAME"}};
+        const std::array<std::string,menuRows> values{{"",settings.fullscreen?"FULLSCREEN":"WINDOWED",
+            settings.fullscreen?"DESKTOP":std::to_string(size[0])+"X"+std::to_string(size[1]),
+            renderNames[settings.renderPreset],settings.vsync?"ON":"OFF",audio::muted()?"OFF":"ON","",""}};
+        for(int i=0;i<menuRows;++i) {
+            const float y=menu_row_y(i);
+            const bool selected=i==settings.row,disabled=i==2&&settings.fullscreen;
+            hud.rectangle(0,y,1.56f,0.165f,selected?Vec3{0.40f,0.27f,0.14f}:Vec3{0.11f,0.115f,0.14f});
+            hud.rectangle(0,y,1.53f,0.145f,selected?Vec3{0.20f,0.145f,0.10f}:Vec3{0.085f,0.09f,0.11f});
+            hud.text(-0.71f,y+0.047f,labels[i],disabled?dim:selected?amber:white,0.95f);
+            if(!values[i].empty())hud.text(0.40f,y+0.047f,values[i],disabled?dim:amber,0.9f,true);
+        }
+        hud.text(0,-0.91f,"ESC RESUME / ARROWS / ENTER / CLICK",dim,0.75f,true);
+        hud.text(0,0.56f,std::to_string(pixelWidth)+"X"+std::to_string(pixelHeight)+" INTERNAL",dim,0.75f,true);
         glEnable(GL_DEPTH_TEST);
     }
 }
@@ -1343,6 +1462,8 @@ static int run_game(int argc, char** argv) {
     }
 
     glfwMakeContextCurrent(window);
+    glfwSwapInterval(settings.vsync?1:0);
+    glfwSetWindowSizeLimits(window,640,360,GLFW_DONT_CARE,GLFW_DONT_CARE);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -1445,8 +1566,10 @@ static int run_game(int argc, char** argv) {
         return 1;
     }
 
-    constexpr int pixelWidth = 320;
-    constexpr int pixelHeight = 180;
+    int pixelWidth = 320;
+    int pixelHeight = 180;
+    GLint maxTextureSize=4096;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE,&maxTextureSize);
 
     GLuint pixelFbo = 0;
     GLuint pixelColor = 0;
@@ -1505,17 +1628,42 @@ static int run_game(int argc, char** argv) {
         previous = now;
 
         const Vec3 beforeInput = camera.position;
-        input(window, deltaTime);
+        const bool frozen = settings_input(window);
+        if (!frozen) input(window, deltaTime);
         const Vec3 motion = camera.position - beforeInput;
         const float travel = std::sqrt(motion.x * motion.x + motion.z * motion.z);
         const bool walking = travel > 0.0001f && travel < 1.5f && camera.onGround;
-        if (walking) weaponBobPhase += travel * 7.0f;
-        weaponBobAmount += ((walking ? 1.0f : 0.0f) - weaponBobAmount) * std::min(1.0f, deltaTime * 12.0f);
+        if (walking && !frozen) weaponBobPhase += travel * 7.0f;
+        if (!frozen) weaponBobAmount += ((walking ? 1.0f : 0.0f) - weaponBobAmount) * std::min(1.0f, deltaTime * 12.0f);
 
         int width = 1;
         int height = 1;
         glfwGetFramebufferSize(window, &width, &height);
+        if(width<=0||height<=0) { glfwWaitEventsTimeout(0.05); continue; }
 
+        // Match the actual framebuffer aspect at every setting, including ultrawide/Retina.
+        const int preset=renderHeights[settings.renderPreset];
+        const int targetHeight=preset==0?height:std::min(preset,height);
+        const float aspect=static_cast<float>(width)/height;
+        const int desiredHeight=std::max(1,std::min({targetHeight,maxTextureSize,
+            static_cast<int>(maxTextureSize/std::max(1.0f,aspect))}));
+        const int desiredWidth=std::max(1,std::min(maxTextureSize,static_cast<int>(std::round(desiredHeight*aspect))));
+        glBindFramebuffer(GL_FRAMEBUFFER,pixelFbo);
+        if(desiredWidth!=pixelWidth||desiredHeight!=pixelHeight) {
+            glBindTexture(GL_TEXTURE_2D,pixelColor);
+            glTexImage2D(GL_TEXTURE_2D,0,GL_RGB8,desiredWidth,desiredHeight,0,GL_RGB,GL_UNSIGNED_BYTE,nullptr);
+            glBindRenderbuffer(GL_RENDERBUFFER,pixelDepth);
+            glRenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH24_STENCIL8,desiredWidth,desiredHeight);
+            if(glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE) {
+                pixelWidth=desiredWidth;pixelHeight=desiredHeight;
+            } else {
+                // Restore the previous successful attachments on allocation failure.
+                glBindTexture(GL_TEXTURE_2D,pixelColor);
+                glTexImage2D(GL_TEXTURE_2D,0,GL_RGB8,pixelWidth,pixelHeight,0,GL_RGB,GL_UNSIGNED_BYTE,nullptr);
+                glRenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH24_STENCIL8,pixelWidth,pixelHeight);
+                settings.renderPreset=0;
+            }
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, pixelFbo);
         glViewport(0, 0, pixelWidth, pixelHeight);
         glEnable(GL_DEPTH_TEST);
@@ -1642,8 +1790,6 @@ static int run_game(int argc, char** argv) {
         glUniformMatrix4fv(glGetUniformLocation(program, "view"), 1, GL_FALSE, weaponView.v);
         draw_view_weapon(program, vao, selectedWeapon == 2, weaponBobPhase, weaponBobAmount,
                          shotFlashTimer, std::max(reloadTimer / reloadDuration, weaponSwitchTimer / 0.32f));
-        draw_hud(hud);
-
         glBindFramebuffer(GL_READ_FRAMEBUFFER, pixelFbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         glBlitFramebuffer(
@@ -1651,6 +1797,12 @@ static int run_game(int argc, char** argv) {
             0, 0, width, height,
             GL_COLOR_BUFFER_BIT, GL_NEAREST
         );
+
+        // Render the UI at output resolution independent of the pixelated game scene.
+        glBindFramebuffer(GL_FRAMEBUFFER,0);
+        glViewport(0,0,width,height);
+        if(settings.paused) draw_settings(hud,pixelWidth,pixelHeight);
+        else draw_hud(hud);
 
         glfwSwapBuffers(window);
         glfwPollEvents();

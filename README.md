@@ -47,9 +47,22 @@ You can also start from the build directory because CMake copies all included ma
 | 1 / 2 | Pistol / shotgun (after pickup) |
 | Q / mouse wheel | Cycle unlocked weapons |
 | M | Mute / unmute sound effects |
-| Esc | Exit |
+| Esc | Pause / settings / resume |
+| F11 | Toggle fullscreen |
+| Arrow keys / Enter / mouse | Navigate pause menu |
 
 The simple enemies move directly toward you when close enough. This is intentionally **not** full AI.
+
+## Settings
+
+Press Esc to pause the game. The settings menu can be operated with the
+mouse or arrow keys and Enter. F11 toggles desktop fullscreen. Window size
+presets: 960×540, 1280×720, 1600×900, 1920×1080, 2560×1440. Fullscreen uses the
+primary monitor's current desktop video mode. Render resolution is independent:
+180p (original retro), 360p, 540p, 720p, 1080p, or Native (framebuffer).
+The renderer preserves the window aspect ratio, including HiDPI displays.
+VSync and sound can be toggled, and the current level can be restarted or
+the game closed. Settings apply immediately and last for the current session.
 
 ## Four-level campaign
 
@@ -157,7 +170,7 @@ Original retro sound effects are synthesized at startup and played by miniaudio 
 
 Perspective FPS camera, OpenGL VAO/VBO meshes, shader-based procedural brick/tile
 materials, basic diffuse and ambient lighting, flashlight cone, 2D HUD,
-and 320×180 retro pixel framebuffer.
+and an adjustable retro pixel framebuffer (180p by default with a native-resolution HUD).
 
 ## Procedural retro models
 
