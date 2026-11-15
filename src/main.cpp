@@ -128,18 +128,15 @@ namespace {
         bool fullscreenTransition = false;
         int windowPreset = 1;
         int windowWidth = 1280, windowHeight = 720;
-        int renderPreset = 0;
-        bool vsync = true;
         bool paused = false;
         int row = 0;
         int windowX = 80, windowY = 80;
         double mx = -1, my = -1;
     } settings;
     constexpr std::array<std::array<int,2>,5> windowSizes{{{960,540},{1280,720},{1600,900},{1920,1080},{2560,1440}}};
-    constexpr std::array<int,6> renderHeights{{180,360,540,720,1080,0}};
-    constexpr std::array<const char*,6> renderNames{{"RETRO 180P","360P","540P","720P","1080P","NATIVE"}};
-    constexpr int menuRows = 8;
-    float menu_row_y(int row) { return 0.39f - static_cast<float>(row)*0.165f; }
+    constexpr int retroHeight = 180;
+    constexpr int menuRows = 6;
+    float menu_row_y(int row) { return 0.36f - static_cast<float>(row)*0.195f; }
 
     bool firstMouse = true;
     bool flashlightEnabled = false;
@@ -338,7 +335,7 @@ namespace {
             pendingScroll=0;
             // Allow Cocoa to complete its Spaces animation without a captured mouse.
             glfwSetInputMode(window,GLFW_CURSOR,(settings.paused||transitioning)?GLFW_CURSOR_NORMAL:GLFW_CURSOR_DISABLED);
-            if(!transitioning)glfwSwapInterval(settings.vsync?1:0);
+            if(!transitioning)glfwSwapInterval(1);
         }
         // Only store true windowed geometry, never transient fullscreen dimensions.
         if(!actual&&!transitioning&&!glfwGetWindowAttrib(window,GLFW_ICONIFIED)&&
@@ -414,13 +411,9 @@ namespace {
                     glfwSetWindowSize(window,size[0],size[1]);
                 }
                 break;
-            case 3:
-                settings.renderPreset=(settings.renderPreset+direction+static_cast<int>(renderHeights.size()))%static_cast<int>(renderHeights.size());
-                break;
-            case 4: settings.vsync=!settings.vsync; glfwSwapInterval(settings.vsync?1:0); break;
-            case 5: audio::toggleMute(); break;
-            case 6: if(activate) { reset_game(); set_paused(window,false); } break;
-            case 7: if(activate) glfwSetWindowShouldClose(window,GLFW_TRUE); break;
+            case 3: audio::toggleMute(); break;
+            case 4: if(activate) { reset_game(); set_paused(window,false); } break;
+            case 5: if(activate) glfwSetWindowShouldClose(window,GLFW_TRUE); break;
         }
     }
 
@@ -1431,10 +1424,10 @@ void main() { color = vec4(ray_color, 1.0); }
         hud.rectangle(0,0,2.0f,2.0f,{0.045f,0.042f,0.052f});
         hud.text(0,0.89f,"PAUSED",amber,1.75f,true);
         hud.text(0,0.68f,"SETTINGS",dim,1.0f,true);
-        const std::array<std::string,menuRows> labels{{"RESUME","DISPLAY MODE","WINDOW SIZE","RENDER RES","VSYNC","SOUND","RESTART LEVEL","QUIT GAME"}};
+        const std::array<std::string,menuRows> labels{{"RESUME","DISPLAY MODE","WINDOW SIZE","SOUND","RESTART LEVEL","QUIT GAME"}};
         const std::array<std::string,menuRows> values{{"",settings.fullscreenTransition?"SWITCHING":settings.fullscreen?"FULLSCREEN":"WINDOWED",
             settings.fullscreen?"DESKTOP":std::to_string(settings.windowWidth)+"X"+std::to_string(settings.windowHeight),
-            renderNames[settings.renderPreset],settings.vsync?"ON":"OFF",audio::muted()?"OFF":"ON","",""}};
+            audio::muted()?"OFF":"ON","",""}};
         for(int i=0;i<menuRows;++i) {
             const float y=menu_row_y(i);
             const bool selected=i==settings.row,disabled=settings.fullscreenTransition||(i==2&&settings.fullscreen);
@@ -1444,7 +1437,7 @@ void main() { color = vec4(ray_color, 1.0); }
             if(!values[i].empty())hud.text(0.40f,y+0.038f,values[i],disabled?dim:amber,0.9f,true);
         }
         hud.text(0,-0.91f,"ESC RESUME / ARROWS / ENTER / CLICK",dim,0.75f,true);
-        hud.text(0,0.56f,std::to_string(pixelWidth)+"X"+std::to_string(pixelHeight)+" INTERNAL",dim,0.75f,true);
+        hud.text(0,0.56f,"RETRO "+std::to_string(pixelWidth)+"X"+std::to_string(pixelHeight)+" INTERNAL",dim,0.75f,true);
         glEnable(GL_DEPTH_TEST);
     }
 }
@@ -1514,7 +1507,7 @@ static int run_game(int argc, char** argv) {
     }
 
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(settings.vsync?1:0);
+    glfwSwapInterval(1);
     glfwSetWindowSizeLimits(window,640,360,GLFW_DONT_CARE,GLFW_DONT_CARE);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
@@ -1698,8 +1691,7 @@ static int run_game(int argc, char** argv) {
         if(width<=0||height<=0) { glfwWaitEventsTimeout(0.05); continue; }
 
         // Match the actual framebuffer aspect at every setting, including ultrawide/Retina.
-        const int preset=renderHeights[settings.renderPreset];
-        const int targetHeight=preset==0?height:std::min(preset,height);
+        const int targetHeight=retroHeight;
         const float aspect=static_cast<float>(width)/height;
         const int desiredHeight=std::max(1,std::min({targetHeight,maxTextureSize,
             static_cast<int>(maxTextureSize/std::max(1.0f,aspect))}));
@@ -1717,7 +1709,7 @@ static int run_game(int argc, char** argv) {
                 glBindTexture(GL_TEXTURE_2D,pixelColor);
                 glTexImage2D(GL_TEXTURE_2D,0,GL_RGB8,pixelWidth,pixelHeight,0,GL_RGB,GL_UNSIGNED_BYTE,nullptr);
                 glRenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH24_STENCIL8,pixelWidth,pixelHeight);
-                settings.renderPreset=0;
+
             }
         }
         glBindFramebuffer(GL_FRAMEBUFFER, pixelFbo);

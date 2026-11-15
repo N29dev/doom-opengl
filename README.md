@@ -62,10 +62,9 @@ and the in-game display mode use native AppKit fullscreen, matching the green
 title-bar button (and Control-Command-F). The menu detects OS fullscreen
 changes automatically and waits for the transition to finish. Windows/Linux
 use GLFW monitor fullscreen. Windowed dimensions are read from the OS;
-fullscreen exit restores the windowed geometry. Render resolution is independent:
-180p (original retro), 360p, 540p, 720p, 1080p, or Native (framebuffer).
+fullscreen exit restores the windowed geometry. The internal render resolution is fixed at 180p (retro), independent of window size.
 The renderer preserves the window aspect ratio, including HiDPI displays.
-VSync and sound can be toggled, and the current level can be restarted or
+VSync stays enabled; sound can be toggled, and the current level can be restarted or
 the game closed. Settings apply immediately and last for the current session.
 
 ## Four-level campaign
@@ -174,7 +173,7 @@ Original retro sound effects are synthesized at startup and played by miniaudio 
 
 Perspective FPS camera, OpenGL VAO/VBO meshes, shader-based procedural brick/tile
 materials, basic diffuse and ambient lighting, flashlight cone, 2D HUD,
-and an adjustable retro pixel framebuffer (180p by default with a native-resolution HUD).
+and a fixed 180p retro pixel framebuffer with a native-resolution HUD.
 
 ## Procedural retro models
 
