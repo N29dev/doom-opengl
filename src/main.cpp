@@ -895,10 +895,56 @@ void main() { color = vec4(rectangle_color, 1.0); }
         return program;
     }
 
+    std::array<int,7> glyph(char c) {
+        switch(c) {
+        case '0': return {14,17,19,21,25,17,14};
+        case '1': return {4,12,4,4,4,4,14};
+        case '2': return {14,17,1,2,4,8,31};
+        case '3': return {30,1,1,14,1,1,30};
+        case '4': return {2,6,10,18,31,2,2};
+        case '5': return {31,16,16,30,1,1,30};
+        case '6': return {14,16,16,30,17,17,14};
+        case '7': return {31,1,2,4,8,8,8};
+        case '8': return {14,17,17,14,17,17,14};
+        case '9': return {14,17,17,15,1,1,14};
+        case 'A': return {14,17,17,31,17,17,17};
+        case 'B': return {30,17,17,30,17,17,30};
+        case 'C': return {14,17,16,16,16,17,14};
+        case 'D': return {30,17,17,17,17,17,30};
+        case 'E': return {31,16,16,30,16,16,31};
+        case 'F': return {31,16,16,30,16,16,16};
+        case 'G': return {14,17,16,23,17,17,15};
+        case 'H': return {17,17,17,31,17,17,17};
+        case 'I': return {14,4,4,4,4,4,14};
+        case 'J': return {7,2,2,2,18,18,12};
+        case 'K': return {17,18,20,24,20,18,17};
+        case 'L': return {16,16,16,16,16,16,31};
+        case 'M': return {17,27,21,21,17,17,17};
+        case 'N': return {17,25,21,19,17,17,17};
+        case 'O': return {14,17,17,17,17,17,14};
+        case 'P': return {30,17,17,30,16,16,16};
+        case 'Q': return {14,17,17,17,21,18,13};
+        case 'R': return {30,17,17,30,20,18,17};
+        case 'S': return {15,16,16,14,1,1,30};
+        case 'T': return {31,4,4,4,4,4,4};
+        case 'U': return {17,17,17,17,17,17,14};
+        case 'V': return {17,17,17,17,17,10,4};
+        case 'W': return {17,17,17,21,21,21,10};
+        case 'X': return {17,17,10,4,10,17,17};
+        case 'Y': return {17,17,10,4,4,4,4};
+        case 'Z': return {31,1,2,4,8,16,31};
+        case '/': return {1,1,2,4,8,16,16};
+        case '-': return {0,0,0,31,0,0,0};
+        case ':': return {0,4,4,0,4,4,0};
+        default: return {};
+        }
+    }
+
     struct HudRenderer {
         GLuint program = 0;
         GLuint vao = 0;
         GLuint vbo = 0;
+        GLuint textVao = 0, textVbo = 0;
 
         bool initialize() {
             program = create_hud_program();
@@ -915,6 +961,13 @@ void main() { color = vec4(rectangle_color, 1.0); }
             glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
             glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
             glEnableVertexAttribArray(0);
+            glGenVertexArrays(1, &textVao);
+            glGenBuffers(1, &textVbo);
+            glBindVertexArray(textVao);
+            glBindBuffer(GL_ARRAY_BUFFER,textVbo);
+            glBufferData(GL_ARRAY_BUFFER,0,nullptr,GL_DYNAMIC_DRAW);
+            glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,2*sizeof(float),nullptr);
+            glEnableVertexAttribArray(0);
             return true;
         }
 
@@ -927,7 +980,36 @@ void main() { color = vec4(rectangle_color, 1.0); }
             glDrawArrays(GL_TRIANGLES, 0, 6);
         }
 
+        // Batch pixel glyphs into one dynamic draw per label instead of one draw per pixel.
+        void text(float x,float y,const std::string& label,Vec3 color,float scale=1.0f,bool centered=false) const {
+            const float sx = 2.0f/320.0f*scale, sy = 2.0f/180.0f*scale;
+            if (centered && !label.empty()) x -= static_cast<float>(label.size()*6-1)*sx*0.5f;
+            std::vector<float> vertices;
+            vertices.reserve(label.size()*35*12);
+            for (char c : label) {
+                const auto bitmap=glyph(c);
+                for(int row=0;row<7;++row) for(int column=0;column<5;++column) {
+                    if(!(bitmap[row]&(16>>column))) continue;
+                    const float l=x+column*sx,r=l+sx,t=y-row*sy,b=t-sy;
+                    const float quad[]={l,b,r,b,r,t,l,b,r,t,l,t};
+                    vertices.insert(vertices.end(),quad,quad+12);
+                }
+                x+=6*sx;
+            }
+            if(vertices.empty()) return;
+            glUseProgram(program);
+            glUniform2f(glGetUniformLocation(program,"offset"),0,0);
+            glUniform2f(glGetUniformLocation(program,"size"),1,1);
+            glUniform3f(glGetUniformLocation(program,"rectangle_color"),color.x,color.y,color.z);
+            glBindVertexArray(textVao);
+            glBindBuffer(GL_ARRAY_BUFFER,textVbo);
+            glBufferData(GL_ARRAY_BUFFER,static_cast<GLsizeiptr>(vertices.size()*sizeof(float)),vertices.data(),GL_DYNAMIC_DRAW);
+            glDrawArrays(GL_TRIANGLES,0,static_cast<GLsizei>(vertices.size()/2));
+        }
+
         void destroy() {
+            glDeleteBuffers(1,&textVbo);
+            glDeleteVertexArrays(1,&textVao);
             glDeleteBuffers(1, &vbo);
             glDeleteVertexArrays(1, &vao);
             glDeleteProgram(program);
@@ -1025,9 +1107,23 @@ void main() { color = vec4(ray_color, 1.0); }
 
     void draw_hud(const HudRenderer& hud) {
         glDisable(GL_DEPTH_TEST);
-        // Simple visual status strips; future UI and text are left for the team.
-        if (gameWon) hud.rectangle(0.0f, 0.2f, 1.25f, 0.10f, {0.05f, 0.7f, 0.3f});
-        if (playerHealth == 0) hud.rectangle(0.0f, 0.2f, 1.25f, 0.10f, {0.8f, 0.04f, 0.04f});
+        const Vec3 white{0.90f,0.91f,0.88f}, amber{1.0f,0.67f,0.25f}, green{0.25f,1.0f,0.50f}, red{1.0f,0.24f,0.19f};
+        const int remaining = enemies_remaining();
+        hud.rectangle(0.0f,0.9f,1.0f,0.17f,{0.07f,0.075f,0.09f});
+        const std::string objective = remaining == 0 ? "EXIT OPEN" : "ENEMIES " + std::to_string(remaining) + "/" + std::to_string(enemies.size());
+        hud.text(0.0f,0.945f,objective,remaining==0?green:amber,1.0f,true);
+        if (currentLevelNumber > 0) hud.text(-0.95f,0.95f,"LEVEL "+std::to_string(currentLevelNumber)+"/3",white);
+        if (audio::muted()) hud.text(0.69f,0.95f,"MUTED",amber);
+        if (exitNotice > 0.0f && remaining > 0 && playerHealth > 0) {
+            hud.rectangle(0,0.30f,1.30f,0.30f,{0.11f,0.035f,0.035f});
+            hud.text(0,0.42f,"EXIT LOCKED",red,1.5f,true);
+            hud.text(0,0.24f,"KILL ALL ENEMIES",white,1.0f,true);
+        }
+        if (gameWon || playerHealth == 0) {
+            hud.rectangle(0,0.2f,1.55f,0.36f,{0.08f,0.065f,0.08f});
+            hud.text(0,0.30f,playerHealth==0?"YOU DIED":currentLevelNumber==3?"CAMPAIGN COMPLETE":"LEVEL COMPLETE",playerHealth==0?red:green,1.5f,true);
+            hud.text(0,0.09f,"PRESS T TO RESTART",white,1.0f,true);
+        }
 
         constexpr float barX = -0.69f;
         constexpr float barY = -0.84f;
@@ -1049,6 +1145,9 @@ void main() { color = vec4(ray_color, 1.0); }
 
         const int currentAmmo = selectedWeapon == 2 ? shotgunAmmo : pistolAmmo;
         const int magazineSize = selectedWeapon == 2 ? 2 : 10;
+        hud.text(-0.92f,-0.70f,"HP "+std::to_string(playerHealth),white);
+        hud.text(0.52f,-0.61f,selectedWeapon==2?"2 SHOTGUN":"1 PISTOL",white,1.0f,true);
+        hud.text(0.52f,-0.91f,std::to_string(currentAmmo)+"/"+std::to_string(magazineSize),white,1.0f,true);
         const Vec3 ammoColor = selectedWeapon == 2
             ? Vec3{0.95f, 0.55f, 0.12f} : Vec3{0.65f, 0.75f, 0.85f};
         hud.rectangle(0.52f, -0.84f, 0.43f, 0.10f, {0.06f, 0.06f, 0.08f});
