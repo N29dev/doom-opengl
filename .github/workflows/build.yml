@@ -17,7 +17,9 @@ jobs:
       - name: Compile
         run: cmake --build build --parallel 2
       - name: Validate level with C++
-        run: ./build/level_validator assets/levels/test_arena.json
+        run: |
+          ./build/level_validator assets/levels/level1.json assets/levels/level2.json assets/levels/level3.json assets/levels/level4.json assets/levels/test_arena.json assets/levels/platforming.json
+          ctest --test-dir build --output-on-failure
 
   windows:
     runs-on: windows-2022
@@ -28,14 +30,16 @@ jobs:
       - name: Compile Windows Release
         run: cmake --build build --config Release --parallel 4
       - name: Validate level with C++
-        run: .\\build\\Release\\level_validator.exe assets\\levels\\test_arena.json
+        run: |
+          .\build\Release\level_validator.exe assets/levels/level1.json assets/levels/level2.json assets/levels/level3.json assets/levels/level4.json assets/levels/test_arena.json assets/levels/platforming.json
+          ctest --test-dir build -C Release --output-on-failure
       - name: Prepare portable test folder
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "dist/assets/levels" | Out-Null
           Copy-Item "build/Release/doom_opengl.exe" "dist/doom_opengl.exe"
           Copy-Item "build/Release/level_validator.exe" "dist/level_validator.exe"
-          Copy-Item "assets/levels/test_arena.json" "dist/assets/levels/test_arena.json"
+          Copy-Item "assets/levels/*.json" "dist/assets/levels/"
           Copy-Item "tools/level-maker.html" "dist/level-maker.html"
           Copy-Item "README.md" "dist/README.md"
       - name: Upload Windows test game
@@ -44,3 +48,16 @@ jobs:
           name: doom-opengl-windows-test
           path: dist/
           if-no-files-found: error
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Compile game and native fullscreen bridge
+        run: cmake --build build --parallel 2
+      - name: Validate all levels
+        run: |
+          ./build/level_validator assets/levels/level1.json assets/levels/level2.json assets/levels/level3.json assets/levels/level4.json assets/levels/test_arena.json assets/levels/platforming.json
+          ctest --test-dir build --output-on-failure

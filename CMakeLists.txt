@@ -5,6 +5,13 @@ project(DoomOpenGL
 	LANGUAGES C CXX
 )
 
+# Enable languages at the top level before GLFW/miniaudio create their targets.
+# On macOS, a late enable_language(OBJCXX) can leave CMake generation rules
+# undefined for sources already added in dependency subdirectories.
+if(APPLE)
+    enable_language(OBJC OBJCXX)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -31,7 +38,22 @@ FetchContent_Declare(
 	GIT_SHALLOW TRUE
 )
 
-FetchContent_MakeAvailable(glfw json)
+# Native audio playback; no Python or runtime asset pack.
+FetchContent_Declare(
+    miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+    GIT_TAG 0.11.21
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR unused-cmake-directory
+)
+FetchContent_MakeAvailable(glfw json miniaudio)
+find_package(Threads REQUIRED)
+add_library(doom_audio STATIC src/Audio.cpp src/miniaudio_impl.c)
+target_include_directories(doom_audio PRIVATE "${miniaudio_SOURCE_DIR}")
+target_link_libraries(doom_audio PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+if(UNIX AND NOT APPLE)
+    target_link_libraries(doom_audio PRIVATE m)
+endif()
 
 find_package(OpenGL REQUIRED)
 
@@ -46,7 +68,14 @@ target_include_directories(level_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(level_core PUBLIC nlohmann_json::nlohmann_json)
 
 add_executable(doom_opengl src/main.cpp)
-target_link_libraries(doom_opengl PRIVATE glfw doom_glad OpenGL::GL level_core)
+target_link_libraries(doom_opengl PRIVATE glfw doom_glad OpenGL::GL level_core doom_audio)
+if(APPLE)
+    set_target_properties(doom_opengl PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    target_sources(doom_opengl PRIVATE src/NativeWindow.mm)
+    set_source_files_properties(src/NativeWindow.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    find_library(APPKIT_FRAMEWORK AppKit REQUIRED)
+    target_link_libraries(doom_opengl PRIVATE ${APPKIT_FRAMEWORK})
+endif()
 
 # Standalone command-line tool; no OpenGL window or Python needed.
 add_executable(level_validator tools/validate_levels.cpp)
@@ -69,13 +98,18 @@ set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT doom_opengl)
 
 # Support launching from the build directory as well as the repository root.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/assets/levels")
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/assets/levels/test_arena.json"
-    "${CMAKE_CURRENT_BINARY_DIR}/assets/levels/test_arena.json"
-    COPYONLY
-)
-configure_file(
-	"${CMAKE_CURRENT_SOURCE_DIR}/assets/levels/level2.json"
-	"${CMAKE_CURRENT_BINARY_DIR}/assets/levels/level2.json"
-	COPYONLY
-)
+foreach(level_file IN ITEMS level1.json level2.json level3.json level4.json test_arena.json platforming.json)
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/levels/${level_file}"
+        "${CMAKE_CURRENT_BINARY_DIR}/assets/levels/${level_file}"
+        COPYONLY
+    )
+endforeach()
+enable_testing()
+add_executable(platform_tests tools/platform_tests.cpp)
+target_link_libraries(platform_tests PRIVATE level_core)
+add_test(NAME platform_collision COMMAND platform_tests "${CMAKE_CURRENT_SOURCE_DIR}/assets/levels/platforming.json")
+
+add_executable(combat_tests tools/combat_tests.cpp)
+target_include_directories(combat_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(NAME combat_balance COMMAND combat_tests)

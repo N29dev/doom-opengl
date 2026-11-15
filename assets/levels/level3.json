@@ -1,0 +1,271 @@
+{
+  "name": "03 - Inferno Ascent",
+  "ceilingHeight": 10,
+  "tiles": [
+    "#########################",
+    "#....~~~~~~~~~~~~~~~....#",
+    "#....~~~~~~~~~~~~~~~..F.#",
+    "#....~~~~~~~~~~~~~~~....#",
+    "#..S.~~~~~~~~~~~~~~~....#",
+    "#.P..~~~~~~~~~~~~~~~.M.X#",
+    "#....~~~~~~~~~~~~~~~..H.#",
+    "#..H.~~~~~~~~~~~~~~~....#",
+    "#....~~~~~~~~~~~~~~~....#",
+    "#....~~~~~~~~~~~~~~~....#",
+    "#########################"
+  ],
+  "platforms": [
+    {
+      "column": 6,
+      "row": 4,
+      "bottom": 0.3,
+      "top": 0.6
+    },
+    {
+      "column": 7,
+      "row": 4,
+      "bottom": 0.3,
+      "top": 0.6
+    },
+    {
+      "column": 6,
+      "row": 5,
+      "bottom": 0.3,
+      "top": 0.6
+    },
+    {
+      "column": 7,
+      "row": 5,
+      "bottom": 0.3,
+      "top": 0.6
+    },
+    {
+      "column": 6,
+      "row": 6,
+      "bottom": 0.3,
+      "top": 0.6
+    },
+    {
+      "column": 7,
+      "row": 6,
+      "bottom": 0.3,
+      "top": 0.6
+    },
+    {
+      "column": 9,
+      "row": 3,
+      "bottom": 0.9,
+      "top": 1.2
+    },
+    {
+      "column": 10,
+      "row": 3,
+      "bottom": 0.9,
+      "top": 1.2
+    },
+    {
+      "column": 9,
+      "row": 4,
+      "bottom": 0.9,
+      "top": 1.2
+    },
+    {
+      "column": 10,
+      "row": 4,
+      "bottom": 0.9,
+      "top": 1.2
+    },
+    {
+      "column": 9,
+      "row": 5,
+      "bottom": 0.9,
+      "top": 1.2
+    },
+    {
+      "column": 10,
+      "row": 5,
+      "bottom": 0.9,
+      "top": 1.2
+    },
+    {
+      "column": 12,
+      "row": 4,
+      "bottom": 1.6,
+      "top": 1.9
+    },
+    {
+      "column": 13,
+      "row": 4,
+      "bottom": 1.6,
+      "top": 1.9
+    },
+    {
+      "column": 12,
+      "row": 5,
+      "bottom": 1.6,
+      "top": 1.9
+    },
+    {
+      "column": 13,
+      "row": 5,
+      "bottom": 1.6,
+      "top": 1.9
+    },
+    {
+      "column": 12,
+      "row": 6,
+      "bottom": 1.6,
+      "top": 1.9
+    },
+    {
+      "column": 13,
+      "row": 6,
+      "bottom": 1.6,
+      "top": 1.9
+    },
+    {
+      "column": 15,
+      "row": 5,
+      "bottom": 2.3,
+      "top": 2.6
+    },
+    {
+      "column": 16,
+      "row": 5,
+      "bottom": 2.3,
+      "top": 2.6
+    },
+    {
+      "column": 15,
+      "row": 6,
+      "bottom": 2.3,
+      "top": 2.6
+    },
+    {
+      "column": 16,
+      "row": 6,
+      "bottom": 2.3,
+      "top": 2.6
+    },
+    {
+      "column": 15,
+      "row": 7,
+      "bottom": 2.3,
+      "top": 2.6
+    },
+    {
+      "column": 16,
+      "row": 7,
+      "bottom": 2.3,
+      "top": 2.6
+    },
+    {
+      "column": 18,
+      "row": 4,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 19,
+      "row": 4,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 18,
+      "row": 5,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 19,
+      "row": 5,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 18,
+      "row": 6,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 19,
+      "row": 6,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 20,
+      "row": 4,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 21,
+      "row": 4,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 22,
+      "row": 4,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 20,
+      "row": 5,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 21,
+      "row": 5,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 22,
+      "row": 5,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 20,
+      "row": 6,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 21,
+      "row": 6,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 22,
+      "row": 6,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 23,
+      "row": 4,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 23,
+      "row": 5,
+      "bottom": 3,
+      "top": 3.3
+    },
+    {
+      "column": 23,
+      "row": 6,
+      "bottom": 3,
+      "top": 3.3
+    }
+  ]
+}

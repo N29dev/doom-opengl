@@ -9,6 +9,9 @@
 #include <string>
 #include <vector>
 #include "Level.hpp"
+#include "Audio.hpp"
+#include "Combat.hpp"
+#include "NativeWindow.hpp"
 
 namespace {
     struct Vec3 {
@@ -120,6 +123,21 @@ namespace {
         }
     } camera;
 
+    struct DisplaySettings {
+        bool fullscreen = false;
+        bool fullscreenTransition = false;
+        int windowPreset = 1;
+        int windowWidth = 1280, windowHeight = 720;
+        bool paused = false;
+        int row = 0;
+        int windowX = 80, windowY = 80;
+        double mx = -1, my = -1;
+    } settings;
+    constexpr std::array<std::array<int,2>,5> windowSizes{{{960,540},{1280,720},{1600,900},{1920,1080},{2560,1440}}};
+    constexpr int retroHeight = 180;
+    constexpr int menuRows = 6;
+    float menu_row_y(int row) { return 0.36f - static_cast<float>(row)*0.195f; }
+
     bool firstMouse = true;
     bool flashlightEnabled = false;
     bool flashlightKeyHeld = false;
@@ -142,6 +160,9 @@ namespace {
     int reloadingWeapon = 0;
     constexpr float reloadDuration = 0.4f;
     constexpr float weaponRange = 24.0f;
+    constexpr float playerEyeHeight = 1.4f;
+    constexpr float playerBodyHeight = 1.6f;
+    constexpr float playerRadius = 0.33f;
     Vec3 rayEnd{};
     std::array<Vec3, 5> rayEnds{};
 
@@ -155,41 +176,93 @@ namespace {
         // Visual state only; collision and AI retain their original dimensions.
         float walkPhase = 0.0f;
         float walkAmount = 0.0f;
+        float flightBase = 0.0f;
+        float vocalTimer = 1.0f;
+        float footstepDistance = 0.0f;
+        float painSoundCooldown = 0.0f;
+        bool boss = false;
+        bool enraged = false;
     };
 
     struct Projectile {
         Vec3 position;
         Vec3 velocity;
         float lifetime;
+        int damage = 35;
     };
 
     Level level;
     Level initialLevel;
     std::vector<Enemy> enemies;
     std::vector<Projectile> projectiles;
-    std::string secondLevelFile;
-    int currentLevelNumber = 1;
+    std::filesystem::path campaignDirectory;
+    constexpr int campaignLevels = 4;
+    constexpr int bossHealth = combat::titanHealth;
+    int currentLevelNumber = 0; // 0 = standalone custom/test level
     bool gameWon = false;
     bool interactKeyHeld = false;
     bool restartKeyHeld = false;
+    bool qHeld = false, muteHeld = false;
+    int pendingScroll = 0;
+    bool exitWasTouched = false, exitWasUnlocked = false;
+    float exitNotice = 0.0f, stepDistance = 0.0f, weaponSwitchTimer = 0.0f;
+    float weaponPickupNotice = 0.0f, weaponLockedNotice = 0.0f;
+
+    int enemies_remaining() {
+        return static_cast<int>(std::count_if(enemies.begin(), enemies.end(), [](const Enemy& e) { return e.health > 0; }));
+    }
+    // Environmental sounds are positioned at their source when triggered.
+    void play_enemy_sound(audio::Sound sound, const Enemy& enemy, float gain = 1.0f) {
+        const Vec3 delta = enemy.position - camera.position;
+        const float distance = std::sqrt(dot(delta,delta));
+        if (distance >= 28.0f) return;
+        const Vec3 front = camera.front();
+        const Vec3 right = normalize(cross({front.x,0.0f,front.z},{0.0f,1.0f,0.0f}));
+        const float horizontal = std::sqrt(delta.x*delta.x+delta.z*delta.z);
+        const float pan = horizontal > 0.001f ? std::clamp(dot(delta,right)/horizontal,-0.9f,0.9f) : 0.0f;
+        const float fade = std::clamp(1.0f-distance/28.0f,0.0f,1.0f);
+        audio::play(sound,gain*fade/(1.0f+0.035f*distance),pan);
+    }
+    void select_weapon(int weapon) {
+        if (weapon == 2 && !shotgunUnlocked) { weaponLockedNotice = 1.25f; return; }
+        if (weapon == selectedWeapon) return;
+        reloadTimer = 0.0f;
+        reloadingWeapon = 0;
+        shotFlashTimer = 0.0f;
+        selectedWeapon = weapon;
+        weaponSwitchTimer = 0.16f;
+        audio::play(audio::Sound::Switch);
+    }
+    void scroll_callback(GLFWwindow*, double, double y) {
+        if (!settings.paused && y != 0.0) pendingScroll = y > 0.0 ? 1 : -1;
+    }
 
     void reset_game() {
         level = initialLevel; // Copy the immutable template, including closed doors and uncollected pickups.
         enemies.clear();
         projectiles.clear();
         for (const GridPosition pos : level.positions('M')) {
-            enemies.push_back({ {level.worldX(pos.column), 0.9f, level.worldZ(pos.row)},
+            enemies.push_back({ {level.worldX(pos.column), level.surfaceAt(pos.column, pos.row) + 0.9f, level.worldZ(pos.row)},
                                 {0.8f, 1.8f, 0.8f}, 180, false, false, 0.0f });
         }
         for (const GridPosition pos : level.positions('F')) {
-            enemies.push_back({ {level.worldX(pos.column), 3.2f, level.worldZ(pos.row)},
+            enemies.push_back({ {level.worldX(pos.column), level.surfaceAt(pos.column, pos.row) + 3.2f, level.worldZ(pos.row)},
                                 {1.1f, 0.9f, 1.1f}, 120, true, false, 0.8f });
         }
         for (const GridPosition pos : level.positions('B')) {
-            enemies.push_back({ {level.worldX(pos.column), 1.5f, level.worldZ(pos.row)},
-                                {1.8f, 3.0f, 1.8f}, 1000, false, true, 0.0f });
+            enemies.push_back({ {level.worldX(pos.column), level.surfaceAt(pos.column, pos.row) + 1.5f, level.worldZ(pos.row)},
+                                {1.8f, 3.0f, 1.8f}, currentLevelNumber==campaignLevels?bossHealth:1000, false, true, 0.0f });
+            if (currentLevelNumber==campaignLevels) {
+                enemies.back().boss=true;
+                enemies.back().projectileCooldown=2.0f;
+            }
         }
-        camera.position = {level.spawnX(), 1.4f, level.spawnZ()};
+        for (std::size_t i=0;i<enemies.size();++i) {
+            auto& enemy=enemies[i];
+            if (enemy.flying) enemy.flightBase=enemy.position.y;
+            enemy.vocalTimer=0.8f+static_cast<float>(i%5)*0.81f;
+        }
+        camera.position = {level.spawnX(), level.spawnFloor() + playerEyeHeight, level.spawnZ()};
         camera.yaw = 0.0f;
         camera.pitch = 0.0f;
         camera.verticalVelocity = 0.0f;
@@ -207,6 +280,11 @@ namespace {
         reloadTimer = 0.0f;
         reloadingWeapon = 0;
         gameWon = false;
+        exitWasTouched = false;
+        exitWasUnlocked = enemies.empty();
+        exitNotice = stepDistance = weaponSwitchTimer = 0.0f;
+        weaponPickupNotice = weaponLockedNotice = 0.0f;
+        pendingScroll = 0;
         previousSpacePressed = false;
         previousFirePressed = false;
         previousSlidePressed = false;
@@ -217,6 +295,7 @@ namespace {
     void fire_weapon();
 
     void mouse_callback(GLFWwindow*, double x, double y) {
+        if (settings.paused || settings.fullscreenTransition) return;
         if (firstMouse) {
             mouseX = x;
             mouseY = y;
@@ -234,9 +313,153 @@ namespace {
         mouseY = y;
     }
 
+    bool actual_fullscreen(GLFWwindow* window) {
+#ifdef __APPLE__
+        return native_window::fullscreen(window);
+#else
+        return glfwGetWindowMonitor(window)!=nullptr;
+#endif
+    }
+
+    void sync_window_mode(GLFWwindow* window) {
+        const bool actual=actual_fullscreen(window);
+#ifdef __APPLE__
+        const bool transitioning=native_window::transitioning();
+#else
+        const bool transitioning=false;
+#endif
+        if (actual!=settings.fullscreen || transitioning!=settings.fullscreenTransition) {
+            settings.fullscreen=actual;
+            settings.fullscreenTransition=transitioning;
+            firstMouse=true;
+            pendingScroll=0;
+            // Allow Cocoa to complete its Spaces animation without a captured mouse.
+            glfwSetInputMode(window,GLFW_CURSOR,(settings.paused||transitioning)?GLFW_CURSOR_NORMAL:GLFW_CURSOR_DISABLED);
+            if(!transitioning)glfwSwapInterval(1);
+        }
+        // Only store true windowed geometry, never transient fullscreen dimensions.
+        if(!actual&&!transitioning&&!glfwGetWindowAttrib(window,GLFW_ICONIFIED)&&
+           !glfwGetWindowAttrib(window,GLFW_MAXIMIZED)) {
+            int w=0,h=0;
+            glfwGetWindowSize(window,&w,&h);
+            if(w>0&&h>0) {
+                settings.windowWidth=w;settings.windowHeight=h;
+                glfwGetWindowPos(window,&settings.windowX,&settings.windowY);
+                int best=0;
+                double bestDistance=1e30;
+                for(int i=0;i<static_cast<int>(windowSizes.size());++i) {
+                    const double dx=w-windowSizes[i][0],dy=h-windowSizes[i][1];
+                    const double distance=dx*dx+dy*dy;
+                    if(distance<bestDistance){bestDistance=distance;best=i;}
+                }
+                settings.windowPreset=best;
+            }
+        }
+    }
+
+    void update_window_mode(GLFWwindow* window, bool fullscreen) {
+        sync_window_mode(window);
+        if (settings.fullscreenTransition || fullscreen == settings.fullscreen) return;
+#ifdef __APPLE__
+        // Use the same AppKit Spaces transition as the green title-bar button.
+        // Do not mix it with glfwSetWindowMonitor on this platform.
+        if(native_window::requestFullscreen(window,fullscreen)) sync_window_mode(window);
+#else
+        if (fullscreen) {
+            GLFWmonitor* monitor=glfwGetPrimaryMonitor();
+            if(!monitor)return;
+            const GLFWvidmode* mode=glfwGetVideoMode(monitor);
+            if(!mode)return;
+            glfwSetWindowMonitor(window,monitor,0,0,mode->width,mode->height,mode->refreshRate);
+        } else {
+            glfwSetWindowMonitor(window,nullptr,settings.windowX,settings.windowY,
+                                 settings.windowWidth,settings.windowHeight,GLFW_DONT_CARE);
+        }
+        sync_window_mode(window);
+#endif
+        firstMouse=true;
+    }
+
+    void set_paused(GLFWwindow* window,bool paused) {
+        settings.paused=paused;
+        settings.mx=settings.my=-1;
+        pendingScroll=0;
+        glfwSetInputMode(window,GLFW_CURSOR,(paused||settings.fullscreenTransition)?GLFW_CURSOR_NORMAL:GLFW_CURSOR_DISABLED);
+        firstMouse=true;
+        if (!paused) {
+            previousFirePressed=glfwGetMouseButton(window,GLFW_MOUSE_BUTTON_LEFT)==GLFW_PRESS;
+            previousSpacePressed=glfwGetKey(window,GLFW_KEY_SPACE)==GLFW_PRESS;
+            previousSlidePressed=glfwGetKey(window,GLFW_KEY_LEFT_CONTROL)==GLFW_PRESS;
+            reloadKeyHeld=glfwGetKey(window,GLFW_KEY_R)==GLFW_PRESS;
+            qHeld=glfwGetKey(window,GLFW_KEY_Q)==GLFW_PRESS;
+            interactKeyHeld=glfwGetKey(window,GLFW_KEY_E)==GLFW_PRESS;
+            restartKeyHeld=glfwGetKey(window,GLFW_KEY_T)==GLFW_PRESS;
+            muteHeld=glfwGetKey(window,GLFW_KEY_M)==GLFW_PRESS;
+            flashlightKeyHeld=glfwGetKey(window,GLFW_KEY_F)==GLFW_PRESS;
+        }
+    }
+
+    void menu_action(GLFWwindow* window,int direction,bool activate) {
+        switch(settings.row) {
+            case 0: if(activate) set_paused(window,false); break;
+            case 1: update_window_mode(window,!settings.fullscreen); break;
+            case 2:
+                if(!settings.fullscreen&&!settings.fullscreenTransition) {
+                    settings.windowPreset=(settings.windowPreset+direction+static_cast<int>(windowSizes.size()))%static_cast<int>(windowSizes.size());
+                    const auto size=windowSizes[settings.windowPreset];
+                    if(glfwGetWindowAttrib(window,GLFW_MAXIMIZED))glfwRestoreWindow(window);
+                    glfwSetWindowSize(window,size[0],size[1]);
+                }
+                break;
+            case 3: audio::toggleMute(); break;
+            case 4: if(activate) { reset_game(); set_paused(window,false); } break;
+            case 5: if(activate) glfwSetWindowShouldClose(window,GLFW_TRUE); break;
+        }
+    }
+
+    // Returns true whenever gameplay should be frozen for this frame.
+    bool settings_input(GLFWwindow* window) {
+        sync_window_mode(window);
+        static std::array<bool,7> held{};
+        constexpr std::array<int,7> keys{{GLFW_KEY_ESCAPE,GLFW_KEY_F11,GLFW_KEY_UP,GLFW_KEY_DOWN,GLFW_KEY_LEFT,GLFW_KEY_RIGHT,GLFW_KEY_ENTER}};
+        std::array<bool,7> pressed{};
+        for(std::size_t i=0;i<keys.size();++i) {
+            const bool down=glfwGetKey(window,keys[i])==GLFW_PRESS;
+            pressed[i]=down&&!held[i];held[i]=down;
+        }
+        static bool clickHeld=false;
+        const bool clickDown=glfwGetMouseButton(window,GLFW_MOUSE_BUTTON_LEFT)==GLFW_PRESS;
+        const bool click=clickDown&&!clickHeld;clickHeld=clickDown;
+        if(settings.fullscreenTransition) return true;
+        if(pressed[1]) { update_window_mode(window,!settings.fullscreen); if(settings.fullscreenTransition) return true; }
+        if(pressed[0]) {
+            set_paused(window,!settings.paused);
+            return true;
+        }
+        if(!settings.paused) return false;
+        int w=0,h=0;glfwGetWindowSize(window,&w,&h);
+        double x=0,y=0;glfwGetCursorPos(window,&x,&y);
+        int hovered=-1;
+        float nx=0;
+        if(w>0&&h>0) {
+            nx=static_cast<float>(2*x/w-1);
+            const float ny=static_cast<float>(1-2*y/h);
+            if(std::abs(nx)<=0.78f)
+                for(int i=0;i<menuRows;++i)
+                    if(std::abs(ny-menu_row_y(i))<0.077f) hovered=i;
+        }
+        if(hovered>=0&&(std::abs(x-settings.mx)>0.5||std::abs(y-settings.my)>0.5)) settings.row=hovered;
+        settings.mx=x;settings.my=y;
+        if(pressed[2])settings.row=(settings.row+menuRows-1)%menuRows;
+        if(pressed[3])settings.row=(settings.row+1)%menuRows;
+        if(pressed[4])menu_action(window,-1,false);
+        else if(pressed[5])menu_action(window,1,false);
+        else if(pressed[6])menu_action(window,1,true);
+        else if(click&&hovered>=0){settings.row=hovered;menu_action(window,nx<0?-1:1,true);}
+        return true;
+    }
+
     void input(GLFWwindow* window, float deltaTime) {
-        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-            glfwSetWindowShouldClose(window, GLFW_TRUE);
 
         const bool restartPressed = glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS;
         if (restartPressed && !restartKeyHeld) {
@@ -245,7 +468,14 @@ namespace {
             std::cout << "Level restarted.\n";
         }
         restartKeyHeld = restartPressed;
-        if (playerHealth <= 0 || gameWon) return;
+        const bool mutePressed = glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS;
+        if (mutePressed && !muteHeld) audio::toggleMute();
+        muteHeld = mutePressed;
+        if (playerHealth <= 0 || gameWon) { pendingScroll = 0; return; }
+        weaponSwitchTimer = std::max(0.0f, weaponSwitchTimer - deltaTime);
+        exitNotice = std::max(0.0f, exitNotice - deltaTime);
+        weaponPickupNotice = std::max(0.0f, weaponPickupNotice - deltaTime);
+        weaponLockedNotice = std::max(0.0f, weaponLockedNotice - deltaTime);
 
         if (reloadTimer > 0.0f) {
             reloadTimer = std::max(0.0f, reloadTimer - deltaTime);
@@ -262,6 +492,7 @@ namespace {
             (selectedWeapon == 1 || shotgunUnlocked)) {
             reloadingWeapon = selectedWeapon;
             reloadTimer = reloadDuration;
+            audio::play(audio::Sound::Reload);
             std::cout << "Reloading...\n";
         }
         reloadKeyHeld = reloadPressed;
@@ -270,14 +501,19 @@ namespace {
         if (fPressed && !flashlightKeyHeld) flashlightEnabled = !flashlightEnabled;
         flashlightKeyHeld = fPressed;
 
-        if (reloadTimer <= 0.0f) {
-            if (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS) selectedWeapon = 1;
-            if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS && shotgunUnlocked) selectedWeapon = 2;
-        }
+        const bool qPressed = glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS;
+        if (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS) select_weapon(1);
+        else if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS) select_weapon(2);
+        else if (((qPressed && !qHeld) || pendingScroll != 0) && shotgunUnlocked)
+            select_weapon(selectedWeapon == 1 ? 2 : 1);
+        qHeld = qPressed;
+        pendingScroll = 0;
 
         const bool ePressed = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
-        if (ePressed && !interactKeyHeld && level.toggleNearbyDoor(camera.position.x, camera.position.z))
+        if (ePressed && !interactKeyHeld && level.toggleNearbyDoor(camera.position.x, camera.position.z)) {
+            audio::play(audio::Sound::Door);
             std::cout << "Door toggled.\n";
+        }
         interactKeyHeld = ePressed;
 
         const Vec3 front = camera.front();
@@ -297,51 +533,87 @@ namespace {
             dot(movement, movement) > 0.0f && slideCooldown <= 0.0f) {
             slideTimer = 0.45f;
             slideCooldown = 1.0f;
+            audio::play(audio::Sound::Slide);
         }
         previousSlidePressed = slidePressed;
 
-        // Separate X/Z collision allows the player to slide along a wall.
-        if (dot(movement, movement) > 0.0f) {
-            const float movementSpeed = slideTimer > 0.0f ? 10.5f : 4.5f;
-            movement = normalize(movement) * (movementSpeed * deltaTime);
-            constexpr float playerRadius = 0.33f;
-            if (!level.circleBlocked(camera.position.x + movement.x, camera.position.z, playerRadius))
-                camera.position.x += movement.x;
-            if (!level.circleBlocked(camera.position.x, camera.position.z + movement.z, playerRadius))
-                camera.position.z += movement.z;
-        }
-
         const bool spacePressed = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
-        if (spacePressed && !previousSpacePressed &&
-            (camera.onGround || camera.jumpsUsed < 2)) {
+        if (spacePressed && !previousSpacePressed && (camera.onGround || camera.jumpsUsed < 2)) {
             camera.verticalVelocity = 6.5f;
             camera.onGround = false;
             ++camera.jumpsUsed;
+            audio::play(audio::Sound::Jump);
         }
         previousSpacePressed = spacePressed;
 
+        // Small integration steps prevent tunneling through platform sides and undersides.
+        const float speed = slideTimer > 0.0f ? 10.5f : 4.5f;
+        const Vec3 velocity = normalize(movement) * speed;
+        const int steps = std::max(1, static_cast<int>(std::ceil(deltaTime * 120.0f)));
+        const float dt = deltaTime / steps;
+        const Vec3 beforeMovement = camera.position;
+        for (int i = 0; i < steps; ++i) {
+            float feet = camera.position.y - playerEyeHeight;
+            const float head = feet + playerBodyHeight;
+            const float nx = camera.position.x + velocity.x * dt;
+            if (!level.bodyBlocked(nx, camera.position.z, playerRadius, feet, head))
+                camera.position.x = nx;
+            const float nz = camera.position.z + velocity.z * dt;
+            if (!level.bodyBlocked(camera.position.x, nz, playerRadius, feet, head))
+                camera.position.z = nz;
+
+            const float nextFeet = feet + camera.verticalVelocity * dt - 9.0f * dt * dt;
+            camera.verticalVelocity -= 18.0f * dt;
+            float contact = 0.0f;
+            const bool wasGrounded = camera.onGround;
+            camera.onGround = false;
+            if (nextFeet <= feet && level.landingHeight(camera.position.x, camera.position.z, playerRadius,
+                                                        feet, nextFeet, contact)) {
+                if (!wasGrounded && camera.verticalVelocity < -2.0f) audio::play(audio::Sound::Land);
+                feet = contact;
+                camera.verticalVelocity = 0.0f;
+                camera.onGround = true;
+                camera.jumpsUsed = 0;
+            } else if (nextFeet > feet && level.ceilingLimit(camera.position.x, camera.position.z, playerRadius,
+                                                               head, nextFeet + playerBodyHeight, contact)) {
+                feet = contact - playerBodyHeight;
+                camera.verticalVelocity = 0.0f;
+            } else {
+                feet = nextFeet;
+            }
+            camera.position.y = feet + playerEyeHeight;
+            if (feet < -1.25f) {
+                playerHealth = 0;
+                audio::play(audio::Sound::Death);
+                std::cout << "Fell into lava. Press T to restart.\n";
+                glfwSetWindowTitle(window, "YOU DIED - press T to restart");
+                return;
+            }
+        }
+
+        if (camera.onGround && slideTimer <= 0.0f) {
+            const Vec3 moved = camera.position - beforeMovement;
+            stepDistance += std::sqrt(moved.x*moved.x + moved.z*moved.z);
+            if (stepDistance >= 1.65f) { stepDistance -= 1.65f; audio::play(audio::Sound::Step, 0.8f); }
+        }
         const bool firePressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
         if (firePressed && !previousFirePressed) fire_weapon();
         previousFirePressed = firePressed;
 
-        camera.position.y += camera.verticalVelocity * deltaTime;
-        camera.verticalVelocity -= 18.0f * deltaTime;
-        if (camera.position.y <= 1.4f) {
-            camera.position.y = 1.4f;
-            camera.verticalVelocity = 0.0f;
-            camera.onGround = true;
-            camera.jumpsUsed = 0;
-        }
-        if (level.collectNearbyShotgun(camera.position.x, camera.position.z)) {
+        if (level.collectNearbyShotgun(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight)) {
             shotgunUnlocked = true;
-            selectedWeapon = 2;
-            std::cout << "Picked up shotgun. Press 1/2 to switch weapons.\n";
+            weaponPickupNotice = 4.5f;
+            weaponLockedNotice = 0.0f;
+            select_weapon(2);
+            audio::play(audio::Sound::Pickup);
+            std::cout << "Picked up shotgun. Press 1/2, Q, or scroll to switch.\n";
         }
 
         damageCooldown = std::max(0.0f, damageCooldown - deltaTime);
         shotFlashTimer = std::max(0.0f, shotFlashTimer - deltaTime);
-        if (playerHealth < 100 && level.collectNearbyHealth(camera.position.x, camera.position.z)) {
+        if (playerHealth < 100 && level.collectNearbyHealth(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight)) {
             playerHealth = std::min(100, playerHealth + 35);
+            audio::play(audio::Sound::Pickup);
             std::cout << "Picked up health. Current health: " << playerHealth << '\n';
         }
 
@@ -352,41 +624,91 @@ namespace {
             const float dx = camera.position.x - enemy.position.x;
             const float dz = camera.position.z - enemy.position.z;
             const float distance = std::sqrt(dx * dx + dz * dz);
+            enemy.painSoundCooldown = std::max(0.0f,enemy.painSoundCooldown-deltaTime);
+            enemy.vocalTimer -= deltaTime;
+            if (distance < 17.0f && enemy.vocalTimer <= 0.0f) {
+                play_enemy_sound(enemy.flying?audio::Sound::FlyHiss:enemy.heavy?audio::Sound::HeavyGrowl:audio::Sound::DemonGrowl,enemy,0.75f);
+                // Stagger the calls so nearby monsters do not all growl in sync.
+                enemy.vocalTimer=3.5f+1.7f*(0.5f+0.5f*std::sin(enemy.position.x*2.7f+enemy.position.z*0.9f+static_cast<float>(glfwGetTime())));
+            }
             if (enemy.flying) {
                 enemy.projectileCooldown -= deltaTime;
-                const float targetY = 3.2f + std::sin(static_cast<float>(glfwGetTime()) + enemy.position.x) * 0.35f;
+                const float targetY = enemy.flightBase + std::sin(static_cast<float>(glfwGetTime()) + enemy.position.x) * 0.35f;
                 enemy.position.y += (targetY - enemy.position.y) * std::min(1.0f, deltaTime * 2.0f);
                 if (distance > 5.0f && distance < 22.0f) {
                     const Vec3 aim = normalize(camera.position - enemy.position);
-                    enemy.position = enemy.position + Vec3{aim.x, 0.0f, aim.z} * (0.9f * deltaTime);
+                    const Vec3 next = enemy.position + Vec3{aim.x, 0.0f, aim.z} * (0.9f * deltaTime);
+                    if (!level.hasPlatforming() || !level.bodyBlocked(next.x, next.z, 0.42f,
+                            next.y - enemy.size.y * 0.5f, next.y + enemy.size.y * 0.5f))
+                        enemy.position = next;
                 }
                 if (enemy.projectileCooldown <= 0.0f && distance < 24.0f) {
                     projectiles.push_back({enemy.position, normalize(camera.position - enemy.position) * 8.0f, 6.0f});
                     enemy.projectileCooldown = 2.0f;
+                    play_enemy_sound(audio::Sound::EnemyFire,enemy,0.9f);
                 }
                 continue;
             }
+            if (enemy.boss) {
+                if (!enemy.enraged && enemy.health <= bossHealth/2) {
+                    enemy.enraged = true;
+                    enemy.projectileCooldown = 0.7f;
+                    play_enemy_sound(audio::Sound::HeavyGrowl,enemy);
+                    std::cout << "The Titan is enraged!\n";
+                }
+                enemy.projectileCooldown -= deltaTime;
+                if (enemy.projectileCooldown <= 0.0f && distance < 27.0f) {
+                    const Vec3 origin=enemy.position+Vec3{0.0f,0.35f,0.0f};
+                    const Vec3 aim=normalize(camera.position-origin);
+                    const int spread=enemy.enraged?1:0;
+                    for (int i=-spread;i<=spread;++i) {
+                        const float angle=i*0.20f;
+                        const Vec3 direction{aim.x*std::cos(angle)-aim.z*std::sin(angle),aim.y,
+                                             aim.x*std::sin(angle)+aim.z*std::cos(angle)};
+                        projectiles.push_back({origin,direction*(enemy.enraged?9.0f:7.0f),6.0f,22});
+                    }
+                    enemy.projectileCooldown=enemy.enraged?1.25f:2.2f;
+                    play_enemy_sound(audio::Sound::HeavyAttack,enemy);
+                }
+            }
             const Vec3 beforeMove = enemy.position;
-            if (distance > 1.2f && distance < 9.0f) {
-                const float enemySpeed = enemy.heavy ? 0.7f : 2.4f;
+            if (distance > (enemy.boss?1.7f:1.2f) && distance < (enemy.boss?32.0f:9.0f)) {
+                const float enemySpeed = enemy.boss ? (enemy.enraged?2.1f:1.35f) : enemy.heavy ? 0.7f : 2.4f;
                 const float stepX = dx / distance * (enemySpeed * deltaTime);
                 const float stepZ = dz / distance * (enemySpeed * deltaTime);
-                if (!level.circleBlocked(enemy.position.x + stepX, enemy.position.z, 0.42f))
-                    enemy.position.x += stepX;
-                if (!level.circleBlocked(enemy.position.x, enemy.position.z + stepZ, 0.42f))
-                    enemy.position.z += stepZ;
+                const float feet = enemy.position.y - enemy.size.y * 0.5f;
+                const auto canMove = [&](float x, float z) {
+                    if (!level.hasPlatforming()) return !level.circleBlocked(x,z,enemy.boss?0.85f:0.42f);
+                    float support = 0.0f;
+                    return !level.bodyBlocked(x,z,0.42f,feet,feet + enemy.size.y) &&
+                           level.landingHeight(x,z,0.12f,feet + 0.005f,feet - 0.005f,support);
+                };
+                if (canMove(enemy.position.x + stepX, enemy.position.z)) enemy.position.x += stepX;
+                if (canMove(enemy.position.x, enemy.position.z + stepZ)) enemy.position.z += stepZ;
             }
             const Vec3 moved = enemy.position - beforeMove;
             const float travel = std::sqrt(dot(moved, moved));
             enemy.walkPhase += travel * (enemy.heavy ? 4.5f : 8.0f);
+            if (enemy.heavy) {
+                enemy.footstepDistance += travel;
+                if (enemy.footstepDistance >= 0.75f) {
+                    enemy.footstepDistance -= 0.75f;
+                    play_enemy_sound(audio::Sound::HeavyStep,enemy,0.8f);
+                }
+            }
             const float moving = travel > 0.0001f ? 1.0f : 0.0f;
             enemy.walkAmount += (moving - enemy.walkAmount) * std::min(1.0f, deltaTime * 10.0f);
             const float closeX = camera.position.x - enemy.position.x;
             const float closeZ = camera.position.z - enemy.position.z;
-            if (damageCooldown <= 0.0f && closeX * closeX + closeZ * closeZ < 1.2f * 1.2f) {
-                const int contactDamage = enemy.heavy ? 45 : 10;
+            const float contactRange = enemy.boss ? 1.85f : 1.2f;
+            if (damageCooldown <= 0.0f && closeX * closeX + closeZ * closeZ < contactRange * contactRange &&
+                (!level.hasPlatforming() || (camera.position.y - playerEyeHeight < enemy.position.y + enemy.size.y * 0.5f &&
+                 camera.position.y - playerEyeHeight + playerBodyHeight > enemy.position.y - enemy.size.y * 0.5f))) {
+                play_enemy_sound(enemy.heavy?audio::Sound::HeavyAttack:audio::Sound::DemonAttack,enemy);
+                const int contactDamage = enemy.boss ? 25 : enemy.heavy ? 45 : 10;
                 playerHealth = std::max(0, playerHealth - contactDamage);
                 damageCooldown = 1.0f;
+                audio::play(playerHealth == 0 ? audio::Sound::Death : audio::Sound::Hurt);
                 if (playerHealth == 0) {
                     std::cout << "You died. Press T to restart.\n";
                     glfwSetWindowTitle(window, "YOU DIED - press T to restart");
@@ -397,14 +719,20 @@ namespace {
         for (Projectile& projectile : projectiles) {
             projectile.position = projectile.position + projectile.velocity * deltaTime;
             projectile.lifetime -= deltaTime;
+            if (level.bodyBlocked(projectile.position.x, projectile.position.z, 0.10f,
+                    projectile.position.y - 0.1f, projectile.position.y + 0.1f)) {
+                projectile.lifetime = 0.0f;
+                continue;
+            }
             const float dx = camera.position.x - projectile.position.x;
             const float dy = camera.position.y - projectile.position.y;
             const float dz = camera.position.z - projectile.position.z;
             if (dx * dx + dy * dy + dz * dz < 0.55f * 0.55f && damageCooldown <= 0.0f) {
-                playerHealth = std::max(0, playerHealth - 35);
+                playerHealth = std::max(0, playerHealth - projectile.damage);
                 projectile.lifetime = 0.0f;
                 damageCooldown = 0.4f;
-                std::cout << "Flying enemy projectile hit you for 35 damage.\n";
+                audio::play(playerHealth == 0 ? audio::Sound::Death : audio::Sound::Hurt);
+                std::cout << "Enemy projectile hit you for " << projectile.damage << " damage.\n";
                 if (playerHealth == 0) {
                     std::cout << "You died. Press T to restart.\n";
                     glfwSetWindowTitle(window, "YOU DIED - press T to restart");
@@ -416,23 +744,44 @@ namespace {
                 [](const Projectile& projectile) { return projectile.lifetime <= 0.0f; }),
             projectiles.end());
 
-        if (level.reachedExit(camera.position.x, camera.position.z)) {
-            if (currentLevelNumber == 1) {
+        const int remaining = enemies_remaining();
+        if (!exitWasUnlocked && remaining == 0) {
+            exitWasUnlocked = true;
+            audio::play(audio::Sound::Clear);
+            std::cout << "All enemies eliminated. Exit unlocked!\n";
+        }
+        const bool atExit = level.reachedExit(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight);
+        if (playerHealth > 0 && atExit && remaining > 0) {
+            if (!exitWasTouched) {
+                audio::play(audio::Sound::Locked);
+                std::cout << "Exit locked: " << remaining << " enemies remaining.\n";
+            }
+            exitNotice = 1.0f;
+        }
+        exitWasTouched = atExit;
+        if (playerHealth > 0 && atExit && remaining == 0) {
+            if (currentLevelNumber >= 1 && currentLevelNumber < campaignLevels) {
+                const int nextNumber = currentLevelNumber + 1;
+                const auto nextFile = campaignDirectory / ("level" + std::to_string(nextNumber) + ".json");
                 std::string loadError;
-                if (!initialLevel.load(secondLevelFile, loadError)) {
+                if (!initialLevel.load(nextFile.string(), loadError)) {
                     std::cerr << loadError << '\n';
                     gameWon = true;
-                    glfwSetWindowTitle(window, "LEVEL 2 LOAD FAILED - press T to restart");
+                    glfwSetWindowTitle(window, "NEXT LEVEL LOAD FAILED - press T to restart");
                 } else {
-                    currentLevelNumber = 2;
+                    currentLevelNumber = nextNumber;
                     reset_game();
-                    std::cout << "Level 2 loaded. Clear the arena and reach the exit.\n";
-                    glfwSetWindowTitle(window, "LEVEL 2 - arena");
+                    audio::play(audio::Sound::Finish);
+                    const std::string title = "DOOM OpenGL | Level " + std::to_string(currentLevelNumber) + " / " + std::to_string(campaignLevels);
+                    std::cout << title << '\n';
+                    glfwSetWindowTitle(window, title.c_str());
                 }
             } else {
                 gameWon = true;
-                std::cout << "Level 2 complete! Press T to restart.\n";
-                glfwSetWindowTitle(window, "LEVEL 2 COMPLETE - press T to restart");
+                audio::play(audio::Sound::Finish);
+                const char* title = currentLevelNumber == campaignLevels ? "CAMPAIGN COMPLETE - press T to restart level" : "LEVEL COMPLETE - press T to restart";
+                std::cout << title << '\n';
+                glfwSetWindowTitle(window, title);
             }
         }
     }
@@ -472,13 +821,15 @@ namespace {
     }
 
     void fire_weapon() {
-        if (reloadTimer > 0.0f) return;
+        if (reloadTimer > 0.0f || weaponSwitchTimer > 0.0f) return;
         int& ammo = selectedWeapon == 2 ? shotgunAmmo : pistolAmmo;
         if (ammo <= 0) {
+            audio::play(audio::Sound::Dry);
             std::cout << "Magazine empty. Press R to reload.\n";
             return;
         }
         --ammo;
+        audio::play(selectedWeapon == 2 ? audio::Sound::Shotgun : audio::Sound::Pistol);
         shotFlashTimer = selectedWeapon == 2 ? 0.18f : 0.12f;
         const float range = selectedWeapon == 2 ? 14.0f : weaponRange;
         const Vec3 front = camera.front();
@@ -492,7 +843,9 @@ namespace {
                 normalize(front + right * 0.06f + up * 0.08f), front}
             : std::array<Vec3, 5>{front, front, front, front, front};
 
-        for (std::size_t rayIndex = 0; rayIndex < directions.size(); ++rayIndex) {
+        bool hitAny = false;
+        std::vector<bool> hitEnemies(enemies.size(),false);
+        for (int rayIndex = 0; rayIndex < combat::rayCount(selectedWeapon); ++rayIndex) {
             const Vec3 direction = directions[rayIndex];
             rayEnds[rayIndex] = camera.position + direction * range;
             float nearestHit = range;
@@ -503,8 +856,8 @@ namespace {
                     if (!level.isSolid(column, row)) continue;
                     float distance = 0.0f;
                     if (ray_intersects_box(camera.position, direction,
-                            {level.worldX(column), 2.25f, level.worldZ(row)},
-                            {Level::kTileSize, 4.5f, Level::kTileSize}, range, distance)
+                            {level.worldX(column), level.ceilingHeight() * 0.5f, level.worldZ(row)},
+                            {Level::kTileSize, level.ceilingHeight(), Level::kTileSize}, range, distance)
                             && distance < nearestHit) {
                         nearestHit = distance;
                         rayEnds[rayIndex] = camera.position + direction * distance;
@@ -512,6 +865,16 @@ namespace {
                 }
             }
 
+            for (const Platform& p : level.platforms()) {
+                float distance = 0.0f;
+                if (ray_intersects_box(camera.position, direction,
+                        {level.worldX(p.column), (p.bottom + p.top) * 0.5f, level.worldZ(p.row)},
+                        {Level::kTileSize, p.top - p.bottom, Level::kTileSize}, range, distance) &&
+                    distance < nearestHit) {
+                    nearestHit = distance;
+                    rayEnds[rayIndex] = camera.position + direction * distance;
+                }
+            }
             for (std::size_t index = 0; index < enemies.size(); ++index) {
                 if (enemies[index].health <= 0) continue;
                 float hitDistance = 0.0f;
@@ -525,14 +888,25 @@ namespace {
             if (hitEnemy >= 0) {
                 rayEnd = camera.position + direction * nearestHit;
                 rayEnds[rayIndex] = rayEnd;
-                const float distanceFactor = std::clamp(1.0f - nearestHit / range, 0.0f, 1.0f);
-                const int damage = selectedWeapon == 2
-                    ? static_cast<int>(12.0f + 43.0f * distanceFactor) : 34;
+                const int damage = combat::hitDamage(selectedWeapon,enemies[hitEnemy].boss,nearestHit,range);
+                hitAny = true;
+                hitEnemies[static_cast<std::size_t>(hitEnemy)] = true;
                 enemies[hitEnemy].health = std::max(0, enemies[hitEnemy].health - damage);
-                if (enemies[hitEnemy].health == 0)
-                    std::cout << "Enemy eliminated.\n";
+                if (enemies[hitEnemy].health == 0) std::cout << "Enemy eliminated.\n";
             }
         }
+        // One monster vocal per hit enemy, rather than one per shotgun pellet.
+        for (std::size_t i=0;i<enemies.size();++i) {
+            if (!hitEnemies[i]) continue;
+            Enemy& enemy=enemies[i];
+            if (enemy.health == 0) {
+                play_enemy_sound(enemy.flying?audio::Sound::FlyDeath:enemy.heavy?audio::Sound::HeavyDeath:audio::Sound::DemonDeath,enemy);
+            } else if (enemy.painSoundCooldown <= 0.0f) {
+                play_enemy_sound(enemy.flying?audio::Sound::FlyPain:enemy.heavy?audio::Sound::HeavyPain:audio::Sound::DemonPain,enemy,0.9f);
+                enemy.painSoundCooldown=0.25f;
+            }
+        }
+        if (hitAny) audio::play(audio::Sound::Hit,0.24f);
     }
 
     GLuint compile_shader(GLenum type, const char* source) {
@@ -763,10 +1137,56 @@ void main() { color = vec4(rectangle_color, 1.0); }
         return program;
     }
 
+    std::array<int,7> glyph(char c) {
+        switch(c) {
+        case '0': return {14,17,19,21,25,17,14};
+        case '1': return {4,12,4,4,4,4,14};
+        case '2': return {14,17,1,2,4,8,31};
+        case '3': return {30,1,1,14,1,1,30};
+        case '4': return {2,6,10,18,31,2,2};
+        case '5': return {31,16,16,30,1,1,30};
+        case '6': return {14,16,16,30,17,17,14};
+        case '7': return {31,1,2,4,8,8,8};
+        case '8': return {14,17,17,14,17,17,14};
+        case '9': return {14,17,17,15,1,1,14};
+        case 'A': return {14,17,17,31,17,17,17};
+        case 'B': return {30,17,17,30,17,17,30};
+        case 'C': return {14,17,16,16,16,17,14};
+        case 'D': return {30,17,17,17,17,17,30};
+        case 'E': return {31,16,16,30,16,16,31};
+        case 'F': return {31,16,16,30,16,16,16};
+        case 'G': return {14,17,16,23,17,17,15};
+        case 'H': return {17,17,17,31,17,17,17};
+        case 'I': return {14,4,4,4,4,4,14};
+        case 'J': return {7,2,2,2,18,18,12};
+        case 'K': return {17,18,20,24,20,18,17};
+        case 'L': return {16,16,16,16,16,16,31};
+        case 'M': return {17,27,21,21,17,17,17};
+        case 'N': return {17,25,21,19,17,17,17};
+        case 'O': return {14,17,17,17,17,17,14};
+        case 'P': return {30,17,17,30,16,16,16};
+        case 'Q': return {14,17,17,17,21,18,13};
+        case 'R': return {30,17,17,30,20,18,17};
+        case 'S': return {15,16,16,14,1,1,30};
+        case 'T': return {31,4,4,4,4,4,4};
+        case 'U': return {17,17,17,17,17,17,14};
+        case 'V': return {17,17,17,17,17,10,4};
+        case 'W': return {17,17,17,21,21,21,10};
+        case 'X': return {17,17,10,4,10,17,17};
+        case 'Y': return {17,17,10,4,4,4,4};
+        case 'Z': return {31,1,2,4,8,16,31};
+        case '/': return {1,1,2,4,8,16,16};
+        case '-': return {0,0,0,31,0,0,0};
+        case ':': return {0,4,4,0,4,4,0};
+        default: return {};
+        }
+    }
+
     struct HudRenderer {
         GLuint program = 0;
         GLuint vao = 0;
         GLuint vbo = 0;
+        GLuint textVao = 0, textVbo = 0;
 
         bool initialize() {
             program = create_hud_program();
@@ -783,6 +1203,13 @@ void main() { color = vec4(rectangle_color, 1.0); }
             glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
             glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
             glEnableVertexAttribArray(0);
+            glGenVertexArrays(1, &textVao);
+            glGenBuffers(1, &textVbo);
+            glBindVertexArray(textVao);
+            glBindBuffer(GL_ARRAY_BUFFER,textVbo);
+            glBufferData(GL_ARRAY_BUFFER,0,nullptr,GL_DYNAMIC_DRAW);
+            glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,2*sizeof(float),nullptr);
+            glEnableVertexAttribArray(0);
             return true;
         }
 
@@ -795,7 +1222,36 @@ void main() { color = vec4(rectangle_color, 1.0); }
             glDrawArrays(GL_TRIANGLES, 0, 6);
         }
 
+        // Batch pixel glyphs into one dynamic draw per label instead of one draw per pixel.
+        void text(float x,float y,const std::string& label,Vec3 color,float scale=1.0f,bool centered=false) const {
+            const float sx = 2.0f/320.0f*scale, sy = 2.0f/180.0f*scale;
+            if (centered && !label.empty()) x -= static_cast<float>(label.size()*6-1)*sx*0.5f;
+            std::vector<float> vertices;
+            vertices.reserve(label.size()*35*12);
+            for (char c : label) {
+                const auto bitmap=glyph(c);
+                for(int row=0;row<7;++row) for(int column=0;column<5;++column) {
+                    if(!(bitmap[row]&(16>>column))) continue;
+                    const float l=x+column*sx,r=l+sx,t=y-row*sy,b=t-sy;
+                    const float quad[]={l,b,r,b,r,t,l,b,r,t,l,t};
+                    vertices.insert(vertices.end(),quad,quad+12);
+                }
+                x+=6*sx;
+            }
+            if(vertices.empty()) return;
+            glUseProgram(program);
+            glUniform2f(glGetUniformLocation(program,"offset"),0,0);
+            glUniform2f(glGetUniformLocation(program,"size"),1,1);
+            glUniform3f(glGetUniformLocation(program,"rectangle_color"),color.x,color.y,color.z);
+            glBindVertexArray(textVao);
+            glBindBuffer(GL_ARRAY_BUFFER,textVbo);
+            glBufferData(GL_ARRAY_BUFFER,static_cast<GLsizeiptr>(vertices.size()*sizeof(float)),vertices.data(),GL_DYNAMIC_DRAW);
+            glDrawArrays(GL_TRIANGLES,0,static_cast<GLsizei>(vertices.size()/2));
+        }
+
         void destroy() {
+            glDeleteBuffers(1,&textVbo);
+            glDeleteVertexArrays(1,&textVao);
             glDeleteBuffers(1, &vbo);
             glDeleteVertexArrays(1, &vao);
             glDeleteProgram(program);
@@ -893,46 +1349,95 @@ void main() { color = vec4(ray_color, 1.0); }
 
     void draw_hud(const HudRenderer& hud) {
         glDisable(GL_DEPTH_TEST);
-        // Simple visual status strips; future UI and text are left for the team.
-        if (gameWon) hud.rectangle(0.0f, 0.2f, 1.25f, 0.10f, {0.05f, 0.7f, 0.3f});
-        if (playerHealth == 0) hud.rectangle(0.0f, 0.2f, 1.25f, 0.10f, {0.8f, 0.04f, 0.04f});
-
-        constexpr float barX = -0.69f;
-        constexpr float barY = -0.84f;
-        constexpr float barWidth = 0.48f;
-        constexpr float barHeight = 0.09f;
-        const float healthRatio = std::clamp(playerHealth / 100.0f, 0.0f, 1.0f);
-
-        hud.rectangle(barX, barY, barWidth, barHeight, { 0.12f, 0.03f, 0.03f });
-        if (healthRatio > 0.0f) {
-            hud.rectangle(
-                barX - barWidth * (1.0f - healthRatio) * 0.5f,
-                barY, barWidth * healthRatio, barHeight * 0.55f,
-                healthRatio > 0.3f ? Vec3{ 0.18f, 0.85f, 0.18f } : Vec3{ 0.95f, 0.12f, 0.08f }
-            );
+        const Vec3 white{0.90f,0.91f,0.88f}, amber{1.0f,0.67f,0.25f}, green{0.25f,1.0f,0.50f}, red{1.0f,0.24f,0.19f};
+        const int remaining = enemies_remaining();
+        hud.rectangle(0.0f,0.925f,0.72f,0.106f,{0.07f,0.075f,0.09f});
+        const std::string objective = remaining == 0 ? "EXIT OPEN" : "ENEMIES " + std::to_string(remaining) + "/" + std::to_string(enemies.size());
+        hud.text(0.0f,0.957f,objective,remaining==0?green:amber,0.82f,true);
+        if (currentLevelNumber > 0) hud.text(-0.95f,0.95f,"LEVEL "+std::to_string(currentLevelNumber)+"/"+std::to_string(campaignLevels),white,0.82f);
+        if (audio::muted()) hud.text(0.76f,0.95f,"MUTED",amber,0.82f);
+        for (const Enemy& enemy : enemies) {
+            if (!enemy.boss || enemy.health <= 0 || playerHealth <= 0 || gameWon) continue;
+            const float ratio=std::clamp(static_cast<float>(enemy.health)/bossHealth,0.0f,1.0f);
+            hud.rectangle(0,0.77f,0.86f,0.16f,{0.08f,0.07f,0.09f});
+            hud.text(0,0.835f,enemy.enraged?"TITAN - ENRAGED":"THE TITAN",enemy.enraged?red:amber,0.82f,true);
+            hud.rectangle(0,0.72f,0.76f,0.025f,{0.24f,0.07f,0.08f});
+            hud.rectangle(-0.38f*(1.0f-ratio),0.72f,0.76f*ratio,0.025f,enemy.enraged?red:amber);
+            break;
+        }
+        if (exitNotice > 0.0f && remaining > 0 && playerHealth > 0) {
+            hud.rectangle(0,0.30f,1.30f,0.30f,{0.11f,0.035f,0.035f});
+            hud.text(0,0.42f,"EXIT LOCKED",red,1.5f,true);
+            hud.text(0,0.24f,"KILL ALL ENEMIES",white,1.0f,true);
+        }
+        if (gameWon || playerHealth == 0) {
+            hud.rectangle(0,0.2f,1.55f,0.36f,{0.08f,0.065f,0.08f});
+            hud.text(0,0.30f,playerHealth==0?"YOU DIED":currentLevelNumber==campaignLevels?"CAMPAIGN COMPLETE":"LEVEL COMPLETE",playerHealth==0?red:green,1.5f,true);
+            hud.text(0,0.09f,"PRESS T TO RESTART",white,1.0f,true);
         }
 
-        hud.rectangle(0.0f, 0.0f, 0.035f, 0.008f, { 1.0f, 0.86f, 0.62f });
-        hud.rectangle(0.0f, 0.0f, 0.008f, 0.035f, { 1.0f, 0.86f, 0.62f });
+        // Compact bottom corners, preserving the middle of the screen for aiming.
+        constexpr float barX=-0.79f,barY=-0.88f,barWidth=0.32f,barHeight=0.055f;
+        const float healthRatio=std::clamp(playerHealth/100.0f,0.0f,1.0f);
+        hud.rectangle(barX,barY,barWidth,barHeight,{0.12f,0.03f,0.03f});
+        if(healthRatio>0.0f)hud.rectangle(barX-barWidth*(1-healthRatio)*0.5f,barY,barWidth*healthRatio,barHeight*0.6f,
+            healthRatio>0.3f?Vec3{0.18f,0.85f,0.18f}:red);
+        hud.text(-0.95f,-0.79f,"HP "+std::to_string(playerHealth),white,0.82f);
 
-        const int currentAmmo = selectedWeapon == 2 ? shotgunAmmo : pistolAmmo;
-        const int magazineSize = selectedWeapon == 2 ? 2 : 10;
-        const Vec3 ammoColor = selectedWeapon == 2
-            ? Vec3{0.95f, 0.55f, 0.12f} : Vec3{0.65f, 0.75f, 0.85f};
-        hud.rectangle(0.52f, -0.84f, 0.43f, 0.10f, {0.06f, 0.06f, 0.08f});
-        for (int bullet = 0; bullet < magazineSize; ++bullet) {
-            const float x = 0.335f + bullet * (0.36f / magazineSize);
-            hud.rectangle(x, -0.84f, 0.025f, 0.055f,
-                          bullet < currentAmmo ? ammoColor : Vec3{0.16f, 0.16f, 0.18f});
+        hud.rectangle(0,0,0.025f,0.006f,{1.0f,0.86f,0.62f});
+        hud.rectangle(0,0,0.006f,0.025f,{1.0f,0.86f,0.62f});
+
+        const Vec3 muted{0.50f,0.52f,0.56f}, panel{0.07f,0.08f,0.10f};
+        for(int weapon=1;weapon<=2;++weapon) {
+            const float x=weapon==1?0.38f:0.77f;
+            const bool unlocked=weapon==1||shotgunUnlocked,active=selectedWeapon==weapon;
+            const Vec3 edge=active?amber:unlocked?Vec3{0.31f,0.35f,0.40f}:Vec3{0.20f,0.21f,0.25f};
+            hud.rectangle(x,-0.80f,0.37f,0.225f,edge);
+            hud.rectangle(x,-0.80f,0.352f,0.205f,panel);
+            hud.text(x,-0.704f,weapon==1?"1 PISTOL":"2 SHOTGUN",active?amber:unlocked?white:muted,0.81f,true);
+            const std::string ammo=weapon==1?std::to_string(pistolAmmo)+"/10":std::to_string(shotgunAmmo)+"/2";
+            hud.text(x,-0.815f,unlocked?ammo:"LOCKED",unlocked?white:muted,0.80f,true);
+            if(active&&reloadTimer>0.0f) {
+                const float ratio=1.0f-reloadTimer/reloadDuration;
+                hud.rectangle(x,-0.897f,0.33f,0.015f,{0.14f,0.12f,0.09f});
+                if(ratio>0.0f)hud.rectangle(x-0.165f*(1.0f-ratio),-0.897f,0.33f*ratio,0.015f,amber);
+            }
         }
-        if (reloadTimer > 0.0f) {
-            const float reloadProgress = 1.0f - reloadTimer / reloadDuration;
-            hud.rectangle(0.52f, -0.75f, 0.43f, 0.025f, {0.12f, 0.08f, 0.03f});
-            hud.rectangle(0.52f - 0.43f * (1.0f - reloadProgress) * 0.5f,
-                          -0.75f, 0.43f * reloadProgress, 0.025f,
-                          {1.0f, 0.68f, 0.12f});
+        hud.text(0.575f,-0.929f,shotgunUnlocked?"Q / SCROLL TO SWAP":"FIND THE SHOTGUN",muted,0.8f,true);
+        if (playerHealth>0 && !gameWon && exitNotice<=0.0f) {
+            if (weaponPickupNotice>0.0f) {
+                hud.rectangle(0,-0.34f,1.45f,0.24f,panel);
+                hud.text(0,-0.24f,"SHOTGUN UNLOCKED",amber,1.0f,true);
+                hud.text(0,-0.35f,"1 / 2 OR Q / SCROLL",white,1.0f,true);
+            } else if (weaponLockedNotice>0.0f) {
+                hud.rectangle(0,-0.34f,1.30f,0.14f,panel);
+                hud.text(0,-0.30f,"FIND THE SHOTGUN FIRST",muted,1.0f,true);
+            }
         }
 
+        glEnable(GL_DEPTH_TEST);
+    }
+
+    void draw_settings(const HudRenderer& hud,int pixelWidth,int pixelHeight) {
+        glDisable(GL_DEPTH_TEST);
+        const Vec3 white{0.91f,0.89f,0.86f},amber{1.0f,0.67f,0.25f},dim{0.56f,0.59f,0.64f};
+        hud.rectangle(0,0,2.0f,2.0f,{0.045f,0.042f,0.052f});
+        hud.text(0,0.89f,"PAUSED",amber,1.75f,true);
+        hud.text(0,0.68f,"SETTINGS",dim,1.0f,true);
+        const std::array<std::string,menuRows> labels{{"RESUME","DISPLAY MODE","WINDOW SIZE","SOUND","RESTART LEVEL","QUIT GAME"}};
+        const std::array<std::string,menuRows> values{{"",settings.fullscreenTransition?"SWITCHING":settings.fullscreen?"FULLSCREEN":"WINDOWED",
+            settings.fullscreen?"DESKTOP":std::to_string(settings.windowWidth)+"X"+std::to_string(settings.windowHeight),
+            audio::muted()?"OFF":"ON","",""}};
+        for(int i=0;i<menuRows;++i) {
+            const float y=menu_row_y(i);
+            const bool selected=i==settings.row,disabled=settings.fullscreenTransition||(i==2&&settings.fullscreen);
+            hud.rectangle(0,y,1.56f,0.149f,selected?Vec3{0.40f,0.27f,0.14f}:Vec3{0.11f,0.115f,0.14f});
+            hud.rectangle(0,y,1.53f,0.129f,selected?Vec3{0.20f,0.145f,0.10f}:Vec3{0.085f,0.09f,0.11f});
+            hud.text(-0.71f,y+0.038f,labels[i],disabled?dim:selected?amber:white,0.95f);
+            if(!values[i].empty())hud.text(0.40f,y+0.038f,values[i],disabled?dim:amber,0.9f,true);
+        }
+        hud.text(0,-0.91f,"ESC RESUME / ARROWS / ENTER / CLICK",dim,0.75f,true);
+        hud.text(0,0.56f,"RETRO "+std::to_string(pixelWidth)+"X"+std::to_string(pixelHeight)+" INTERNAL",dim,0.75f,true);
         glEnable(GL_DEPTH_TEST);
     }
 }
@@ -940,7 +1445,7 @@ void main() { color = vec4(ray_color, 1.0); }
 namespace {
     std::string find_level(int argc, char** argv) {
         namespace fs = std::filesystem;
-        const fs::path requested = argc > 1 ? fs::path(argv[1]) : fs::path("assets/levels/test_arena.json");
+        const fs::path requested = argc > 1 ? fs::path(argv[1]) : fs::path("assets/levels/level1.json");
         if (requested.is_absolute() || fs::exists(requested)) {
             return requested.string();
         }
@@ -962,8 +1467,14 @@ namespace {
 
 static int run_game(int argc, char** argv) {
     const std::string levelFile = find_level(argc, argv);
-    secondLevelFile = (std::filesystem::path(levelFile).parent_path() / "level2.json").string();
-    currentLevelNumber = std::filesystem::path(levelFile).stem() == "level2" ? 2 : 1;
+    const std::filesystem::path path(levelFile);
+    campaignDirectory = path.parent_path();
+    const auto stem = path.stem().string();
+    if (stem == "level1") currentLevelNumber = 1;
+    else if (stem == "level2") currentLevelNumber = 2;
+    else if (stem == "level3") currentLevelNumber = 3;
+    else if (stem == "level4") currentLevelNumber = 4;
+    else currentLevelNumber = 0;
     std::string loadError;
     if (!initialLevel.load(levelFile, loadError)) {
         std::cerr << loadError << '\n';
@@ -996,7 +1507,10 @@ static int run_game(int argc, char** argv) {
     }
 
     glfwMakeContextCurrent(window);
+    glfwSwapInterval(1);
+    glfwSetWindowSizeLimits(window,640,360,GLFW_DONT_CARE,GLFW_DONT_CARE);
     glfwSetCursorPosCallback(window, mouse_callback);
+    glfwSetScrollCallback(window, scroll_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     if (gladLoadGL(glfwGetProcAddress) < GLAD_MAKE_VERSION(3, 3)) {
@@ -1097,8 +1611,10 @@ static int run_game(int argc, char** argv) {
         return 1;
     }
 
-    constexpr int pixelWidth = 320;
-    constexpr int pixelHeight = 180;
+    int pixelWidth = 320;
+    int pixelHeight = 180;
+    GLint maxTextureSize=4096;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE,&maxTextureSize);
 
     GLuint pixelFbo = 0;
     GLuint pixelColor = 0;
@@ -1146,6 +1662,11 @@ static int run_game(int argc, char** argv) {
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+#ifdef __APPLE__
+    native_window::observe(window);
+#endif
+    sync_window_mode(window);
+    if (!audio::initialize()) std::cerr << "Audio device unavailable; continuing silently.\n";
     double previous = glfwGetTime();
     float weaponBobPhase = 0.0f;
     float weaponBobAmount = 0.0f;
@@ -1156,17 +1677,41 @@ static int run_game(int argc, char** argv) {
         previous = now;
 
         const Vec3 beforeInput = camera.position;
-        input(window, deltaTime);
+        const bool frozen = settings_input(window);
+        if (!frozen) input(window, deltaTime);
         const Vec3 motion = camera.position - beforeInput;
         const float travel = std::sqrt(motion.x * motion.x + motion.z * motion.z);
         const bool walking = travel > 0.0001f && travel < 1.5f && camera.onGround;
-        if (walking) weaponBobPhase += travel * 7.0f;
-        weaponBobAmount += ((walking ? 1.0f : 0.0f) - weaponBobAmount) * std::min(1.0f, deltaTime * 12.0f);
+        if (walking && !frozen) weaponBobPhase += travel * 7.0f;
+        if (!frozen) weaponBobAmount += ((walking ? 1.0f : 0.0f) - weaponBobAmount) * std::min(1.0f, deltaTime * 12.0f);
 
         int width = 1;
         int height = 1;
         glfwGetFramebufferSize(window, &width, &height);
+        if(width<=0||height<=0) { glfwWaitEventsTimeout(0.05); continue; }
 
+        // Match the actual framebuffer aspect at every setting, including ultrawide/Retina.
+        const int targetHeight=retroHeight;
+        const float aspect=static_cast<float>(width)/height;
+        const int desiredHeight=std::max(1,std::min({targetHeight,maxTextureSize,
+            static_cast<int>(maxTextureSize/std::max(1.0f,aspect))}));
+        const int desiredWidth=std::max(1,std::min(maxTextureSize,static_cast<int>(std::round(desiredHeight*aspect))));
+        glBindFramebuffer(GL_FRAMEBUFFER,pixelFbo);
+        if(desiredWidth!=pixelWidth||desiredHeight!=pixelHeight) {
+            glBindTexture(GL_TEXTURE_2D,pixelColor);
+            glTexImage2D(GL_TEXTURE_2D,0,GL_RGB8,desiredWidth,desiredHeight,0,GL_RGB,GL_UNSIGNED_BYTE,nullptr);
+            glBindRenderbuffer(GL_RENDERBUFFER,pixelDepth);
+            glRenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH24_STENCIL8,desiredWidth,desiredHeight);
+            if(glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE) {
+                pixelWidth=desiredWidth;pixelHeight=desiredHeight;
+            } else {
+                // Restore the previous successful attachments on allocation failure.
+                glBindTexture(GL_TEXTURE_2D,pixelColor);
+                glTexImage2D(GL_TEXTURE_2D,0,GL_RGB8,pixelWidth,pixelHeight,0,GL_RGB,GL_UNSIGNED_BYTE,nullptr);
+                glRenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH24_STENCIL8,pixelWidth,pixelHeight);
+
+            }
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, pixelFbo);
         glViewport(0, 0, pixelWidth, pixelHeight);
         glEnable(GL_DEPTH_TEST);
@@ -1208,9 +1753,26 @@ static int run_game(int argc, char** argv) {
         // Teammates can replace the placeholder geometry and materials later.
         const float floorWidth = level.width() * Level::kTileSize;
         const float floorDepth = level.height() * Level::kTileSize;
-        draw_box(program, vao, {0.0f, -0.25f, 0.0f},
-                 {floorWidth, 0.5f, floorDepth}, {0.17f, 0.09f, 0.08f});
-        draw_box(program, vao, {0.0f, 4.75f, 0.0f},
+        if (!level.hasLava()) {
+            draw_box(program, vao, {0.0f, -0.25f, 0.0f},
+                     {floorWidth, 0.5f, floorDepth}, {0.17f, 0.09f, 0.08f});
+        } else {
+            // Merge consecutive equal floor tiles by row to avoid excessive draw calls.
+            for (int row = 0; row < level.height(); ++row) {
+                for (int start = 0; start < level.width();) {
+                    const bool floor = level.hasFloor(start,row);
+                    int end = start + 1;
+                    while (end < level.width() && level.hasFloor(end,row) == floor) ++end;
+                    const Vec3 center{(level.worldX(start) + level.worldX(end - 1)) * 0.5f,
+                                      floor ? -0.25f : -1.55f, level.worldZ(row)};
+                    const Vec3 size{(end-start)*Level::kTileSize, 0.5f, Level::kTileSize};
+                    if (floor) draw_box(program,vao,center,size,{0.17f,0.09f,0.08f});
+                    else draw_model_box(program,vao,model_matrix(center,size),{0.80f,0.14f,0.015f},3);
+                    start = end;
+                }
+            }
+        }
+        draw_box(program, vao, {0.0f, level.ceilingHeight() + 0.25f, 0.0f},
                  {floorWidth, 0.5f, floorDepth}, {0.1f, 0.07f, 0.12f});
 
         for (int row = 0; row < level.height(); ++row) {
@@ -1219,27 +1781,42 @@ static int run_game(int argc, char** argv) {
                 const float x = level.worldX(column);
                 const float z = level.worldZ(row);
                 if (level.isSolid(column, row)) {
-                    if (tile == 'D') draw_door_model(program, vao, {x, 2.25f, z});
-                    else draw_box(program, vao, {x, 2.25f, z},
-                                  {Level::kTileSize, 4.5f, Level::kTileSize}, {0.30f, 0.08f, 0.09f});
+                    if (tile == 'D' && level.ceilingHeight() == 4.5f) draw_door_model(program, vao, {x, 2.25f, z});
+                    else draw_box(program, vao, {x, level.ceilingHeight() * 0.5f, z},
+                                  {Level::kTileSize, level.ceilingHeight(), Level::kTileSize},
+                                  tile == 'D' ? Vec3{0.48f,0.35f,0.09f} : Vec3{0.30f,0.08f,0.09f});
                 }
                 const float time = static_cast<float>(now);
+                const float y = level.surfaceAt(column,row);
                 if (tile == 'H' && !level.isHealthCollected(column, row))
-                    draw_medkit_model(program, vao, {x, 0.50f, z}, time);
+                    draw_medkit_model(program, vao, {x, y + 0.50f, z}, time);
                 if (tile == 'S' && !level.isShotgunCollected(column, row))
-                    draw_shotgun_pickup(program, vao, {x, 0.52f, z}, time);
+                    draw_shotgun_pickup(program, vao, {x, y + 0.52f, z}, time);
                 if (tile == 'X') {
-                    draw_box(program, vao, {x, 0.04f, z},
-                             {1.4f, 0.08f, 1.4f}, {0.09f, 0.65f, 0.5f});
+                    const Vec3 exitColor = exitWasUnlocked ? Vec3{0.10f,0.88f,0.46f} : Vec3{0.90f,0.08f,0.05f};
+                    draw_model_box(program,vao,model_matrix({x,y+0.04f,z},{1.4f,0.08f,1.4f}),exitColor,3);
+                    for (int side : {-1,1})
+                        draw_model_box(program,vao,model_matrix({x+side*0.63f,y+0.65f,z},{0.11f,1.3f,0.11f}),exitColor,3);
                 }
             }
+        }
+
+        for (const Platform& p : level.platforms()) {
+            const float x = level.worldX(p.column), z = level.worldZ(p.row);
+            const float thickness = p.top - p.bottom;
+            draw_model_box(program,vao,model_matrix({x,(p.bottom + p.top)*0.5f,z},
+                {Level::kTileSize,thickness,Level::kTileSize}),{0.24f,0.31f,0.36f},1);
+            // Recessed stripes on the top surface, kept within the collision bounds.
+            for (int line = -1; line <= 1; line += 2)
+                draw_model_box(program,vao,model_matrix({x + line*0.82f,p.top-0.008f,z},
+                    {0.10f,0.02f,1.9f}),{0.78f,0.47f,0.11f},3);
         }
 
         for (const Enemy& enemy : enemies) {
             if (enemy.health <= 0) continue;
             const Vec3 toward = camera.position - enemy.position;
             const float facing = std::atan2(toward.x, toward.z);
-            const float maxHealth = enemy.heavy ? 1000.0f : (enemy.flying ? 120.0f : 180.0f);
+            const float maxHealth = enemy.boss ? static_cast<float>(bossHealth) : enemy.heavy ? 1000.0f : (enemy.flying ? 120.0f : 180.0f);
             const float health = std::clamp(enemy.health / maxHealth, 0.0f, 1.0f);
             if (enemy.heavy)
                 draw_heavy_model(program, vao, enemy.position, facing, health, enemy.walkPhase, enemy.walkAmount);
@@ -1260,9 +1837,7 @@ static int run_game(int argc, char** argv) {
         const Mat4 weaponView = identity();
         glUniformMatrix4fv(glGetUniformLocation(program, "view"), 1, GL_FALSE, weaponView.v);
         draw_view_weapon(program, vao, selectedWeapon == 2, weaponBobPhase, weaponBobAmount,
-                         shotFlashTimer, reloadTimer / reloadDuration);
-        draw_hud(hud);
-
+                         shotFlashTimer, std::max(reloadTimer / reloadDuration, weaponSwitchTimer / 0.32f));
         glBindFramebuffer(GL_READ_FRAMEBUFFER, pixelFbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         glBlitFramebuffer(
@@ -1271,10 +1846,20 @@ static int run_game(int argc, char** argv) {
             GL_COLOR_BUFFER_BIT, GL_NEAREST
         );
 
+        // Render the UI at output resolution independent of the pixelated game scene.
+        glBindFramebuffer(GL_FRAMEBUFFER,0);
+        glViewport(0,0,width,height);
+        if(settings.paused) draw_settings(hud,pixelWidth,pixelHeight);
+        else draw_hud(hud);
+
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 
+    audio::shutdown();
+#ifdef __APPLE__
+    native_window::unobserve();
+#endif
     glDeleteRenderbuffers(1, &pixelDepth);
     glDeleteTextures(1, &pixelColor);
     glDeleteFramebuffers(1, &pixelFbo);
