@@ -10,6 +10,7 @@
 #include <vector>
 #include "Level.hpp"
 #include "Audio.hpp"
+#include "Combat.hpp"
 #include "NativeWindow.hpp"
 
 namespace {
@@ -199,7 +200,7 @@ namespace {
     std::vector<Projectile> projectiles;
     std::filesystem::path campaignDirectory;
     constexpr int campaignLevels = 4;
-    constexpr int bossHealth = 650;
+    constexpr int bossHealth = combat::titanHealth;
     int currentLevelNumber = 0; // 0 = standalone custom/test level
     bool gameWon = false;
     bool interactKeyHeld = false;
@@ -671,15 +672,15 @@ namespace {
                         const float angle=i*0.20f;
                         const Vec3 direction{aim.x*std::cos(angle)-aim.z*std::sin(angle),aim.y,
                                              aim.x*std::sin(angle)+aim.z*std::cos(angle)};
-                        projectiles.push_back({origin,direction*(enemy.enraged?7.0f:5.5f),6.0f,18});
+                        projectiles.push_back({origin,direction*(enemy.enraged?9.0f:7.0f),6.0f,22});
                     }
-                    enemy.projectileCooldown=enemy.enraged?1.55f:2.65f;
+                    enemy.projectileCooldown=enemy.enraged?1.25f:2.2f;
                     play_enemy_sound(audio::Sound::HeavyAttack,enemy);
                 }
             }
             const Vec3 beforeMove = enemy.position;
             if (distance > (enemy.boss?1.7f:1.2f) && distance < (enemy.boss?32.0f:9.0f)) {
-                const float enemySpeed = enemy.boss ? (enemy.enraged?1.65f:1.0f) : enemy.heavy ? 0.7f : 2.4f;
+                const float enemySpeed = enemy.boss ? (enemy.enraged?2.1f:1.35f) : enemy.heavy ? 0.7f : 2.4f;
                 const float stepX = dx / distance * (enemySpeed * deltaTime);
                 const float stepZ = dz / distance * (enemySpeed * deltaTime);
                 const float feet = enemy.position.y - enemy.size.y * 0.5f;
@@ -851,7 +852,7 @@ namespace {
 
         bool hitAny = false;
         std::vector<bool> hitEnemies(enemies.size(),false);
-        for (std::size_t rayIndex = 0; rayIndex < directions.size(); ++rayIndex) {
+        for (int rayIndex = 0; rayIndex < combat::rayCount(selectedWeapon); ++rayIndex) {
             const Vec3 direction = directions[rayIndex];
             rayEnds[rayIndex] = camera.position + direction * range;
             float nearestHit = range;
@@ -894,9 +895,7 @@ namespace {
             if (hitEnemy >= 0) {
                 rayEnd = camera.position + direction * nearestHit;
                 rayEnds[rayIndex] = rayEnd;
-                const float distanceFactor = std::clamp(1.0f - nearestHit / range, 0.0f, 1.0f);
-                const int damage = selectedWeapon == 2
-                    ? static_cast<int>(12.0f + 43.0f * distanceFactor) : 34;
+                const int damage = combat::hitDamage(selectedWeapon,enemies[hitEnemy].boss,nearestHit,range);
                 hitAny = true;
                 hitEnemies[static_cast<std::size_t>(hitEnemy)] = true;
                 enemies[hitEnemy].health = std::max(0, enemies[hitEnemy].health - damage);

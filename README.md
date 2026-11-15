@@ -75,7 +75,7 @@ Launch the game without arguments to play the campaign in order:
 1. **Outer Bunker** — two doors, flat rooms, demons, shotgun, and a health pickup.
 2. **Molten Foundry** — lava channels with safe walkable bridges and a flying enemy.
 3. **Inferno Ascent** — broad floating platforms over lava, gentle height progression, and a raised exit.
-4. **The Titan** — dedicated boss arena with cover pillars, a shotgun and medkits. The 650 HP heavy boss fires projectiles and becomes faster with a three-shot spread below half health.
+4. **The Titan** — dedicated boss arena with cover pillars, a shotgun and medkits. The 850 HP armored boss resists pistol damage, fires faster projectiles, and becomes faster with a three-shot spread below half health. A pistol shot uses one ray (40 damage to regular enemies, 25 to the Titan); the shotgun uses five pellets with distance falloff.
 
 Eliminate every enemy to unlock the exit (red becomes green); touch the unlocked exit to progress. The fourth exit completes the campaign.
 Health and inventory reset at each stage, with new pickups provided.

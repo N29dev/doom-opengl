@@ -109,3 +109,7 @@ enable_testing()
 add_executable(platform_tests tools/platform_tests.cpp)
 target_link_libraries(platform_tests PRIVATE level_core)
 add_test(NAME platform_collision COMMAND platform_tests "${CMAKE_CURRENT_SOURCE_DIR}/assets/levels/platforming.json")
+
+add_executable(combat_tests tools/combat_tests.cpp)
+target_include_directories(combat_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(NAME combat_balance COMMAND combat_tests)
