@@ -18,7 +18,7 @@ jobs:
         run: cmake --build build --parallel 2
       - name: Validate level with C++
         run: |
-          ./build/level_validator assets/levels/test_arena.json assets/levels/level2.json assets/levels/platforming.json
+          ./build/level_validator assets/levels/level1.json assets/levels/level2.json assets/levels/level3.json assets/levels/test_arena.json assets/levels/platforming.json
           ctest --test-dir build --output-on-failure
 
   windows:
@@ -31,7 +31,7 @@ jobs:
         run: cmake --build build --config Release --parallel 4
       - name: Validate level with C++
         run: |
-          .\build\Release\level_validator.exe assets/levels/test_arena.json assets/levels/level2.json assets/levels/platforming.json
+          .\build\Release\level_validator.exe assets/levels/level1.json assets/levels/level2.json assets/levels/level3.json assets/levels/test_arena.json assets/levels/platforming.json
           ctest --test-dir build -C Release --output-on-failure
       - name: Prepare portable test folder
         shell: pwsh

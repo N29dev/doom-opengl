@@ -29,7 +29,7 @@ cmake --build build
 ./build/doom_opengl
 ```
 
-You can also start the game from the build directory because CMake copies the test arena there.
+You can also start from the build directory because CMake copies all included maps there.
 
 ## Controls
 
@@ -49,10 +49,26 @@ You can also start the game from the build directory because CMake copies the te
 
 The simple enemies move directly toward you when close enough. This is intentionally **not** full AI.
 
+## Three-level campaign
+
+Launch the game without arguments to play the campaign in order:
+
+1. **Outer Bunker** — two doors, flat rooms, demons, shotgun, and a health pickup.
+2. **Molten Foundry** — lava channels with safe walkable bridges and a flying enemy.
+3. **Inferno Ascent** — broad floating platforms over lava, gentle height progression, and a raised exit.
+
+Touch the exit to load the next level; the third exit completes the campaign.
+Health and inventory reset at each stage, with new pickups provided.
+Use T to restart the current stage.
+
+To start at a specific stage, pass `assets/levels/level2.json` or
+`assets/levels/level3.json` to the executable. Other map filenames are standalone
+test levels. The original test arena and collision sample remain available.
+
 ## Level maker & test arena
 
 Open [`tools/level-maker.html`](tools/level-maker.html) in any browser. It works offline.
-Choose a tile or platform brush, click/drag to paint the grid, inspect the orbitable 3D preview, then **Export JSON**. Use the platform brush to set a top height and bottom height independently of the tile/entity. Undo/redo and the built-in sample are available.
+Choose a tile or platform brush, click/drag to paint the grid, inspect the orbitable 3D preview, then **Export JSON**. Use the platform brush to set a top height and bottom height independently of the tile/entity. Undo/redo and all three campaign maps plus the built-in platforming sample are available.
 Copy the JSON into `assets/levels/` and launch the game with its file path:
 
 ```bash
@@ -127,7 +143,7 @@ under gaps. One platform per tile; a spawn, pickup, enemy or exit on a
 platform uses its top as the entity's base height. Older maps still load.
 The editor's reachability hint is approximate; the native validator checks
 shape and non-wall connectivity, not whether each possible jump is feasible.
-Playtest exported levels. Custom maps launched explicitly finish at their own exit.
+Playtest exported levels. Custom maps with names other than level1.json, level2.json and level3.json finish at their own exit.
 Run `ctest --test-dir build -C Release --output-on-failure` for collision tests.
 
 ## Graphics already present
@@ -145,8 +161,8 @@ doors and projectiles have new models. The pistol and shotgun use a separate 3D
 camera-space weapon pass, with recoil, reload and movement bob. Enemy leg movement
 and wing flapping are visual only; hitboxes and gameplay remain unchanged.
 
-Test both levels: look at each enemy, shoot it, pick up the medkit/shotgun, switch
-weapons, reload, toggle doors, and walk/slide/jump. Verify that both levels are
+Test all three campaign levels: look at each enemy, shoot it, pick up the medkit/shotgun, switch
+weapons, reload, toggle doors, and walk/slide/jump. Verify that all three campaign levels are
 present in the assets/levels directory before starting the game.
 
 ## Team TODO (deliberately unfinished)

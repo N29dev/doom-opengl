@@ -171,8 +171,8 @@ namespace {
     Level initialLevel;
     std::vector<Enemy> enemies;
     std::vector<Projectile> projectiles;
-    std::string secondLevelFile;
-    int currentLevelNumber = 1;
+    std::filesystem::path campaignDirectory;
+    int currentLevelNumber = 0; // 0 = standalone custom/test level, 1..3 = campaign
     bool gameWon = false;
     bool interactKeyHeld = false;
     bool restartKeyHeld = false;
@@ -457,23 +457,27 @@ namespace {
                 [](const Projectile& projectile) { return projectile.lifetime <= 0.0f; }),
             projectiles.end());
 
-        if (level.reachedExit(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight)) {
-            if (currentLevelNumber == 1) {
+        if (playerHealth > 0 && level.reachedExit(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight)) {
+            if (currentLevelNumber >= 1 && currentLevelNumber < 3) {
+                const int nextNumber = currentLevelNumber + 1;
+                const auto nextFile = campaignDirectory / ("level" + std::to_string(nextNumber) + ".json");
                 std::string loadError;
-                if (!initialLevel.load(secondLevelFile, loadError)) {
+                if (!initialLevel.load(nextFile.string(), loadError)) {
                     std::cerr << loadError << '\n';
                     gameWon = true;
-                    glfwSetWindowTitle(window, "LEVEL 2 LOAD FAILED - press T to restart");
+                    glfwSetWindowTitle(window, "NEXT LEVEL LOAD FAILED - press T to restart");
                 } else {
-                    currentLevelNumber = 2;
+                    currentLevelNumber = nextNumber;
                     reset_game();
-                    std::cout << "Level 2 loaded. Clear the arena and reach the exit.\n";
-                    glfwSetWindowTitle(window, "LEVEL 2 - arena");
+                    const std::string title = "DOOM OpenGL | Level " + std::to_string(currentLevelNumber) + " / 3";
+                    std::cout << title << '\n';
+                    glfwSetWindowTitle(window, title.c_str());
                 }
             } else {
                 gameWon = true;
-                std::cout << "Level complete! Press T to restart.\n";
-                glfwSetWindowTitle(window, "LEVEL COMPLETE - press T to restart");
+                const char* title = currentLevelNumber == 3 ? "CAMPAIGN COMPLETE - press T to restart level" : "LEVEL COMPLETE - press T to restart";
+                std::cout << title << '\n';
+                glfwSetWindowTitle(window, title);
             }
         }
     }
@@ -991,7 +995,7 @@ void main() { color = vec4(ray_color, 1.0); }
 namespace {
     std::string find_level(int argc, char** argv) {
         namespace fs = std::filesystem;
-        const fs::path requested = argc > 1 ? fs::path(argv[1]) : fs::path("assets/levels/test_arena.json");
+        const fs::path requested = argc > 1 ? fs::path(argv[1]) : fs::path("assets/levels/level1.json");
         if (requested.is_absolute() || fs::exists(requested)) {
             return requested.string();
         }
@@ -1013,8 +1017,13 @@ namespace {
 
 static int run_game(int argc, char** argv) {
     const std::string levelFile = find_level(argc, argv);
-    secondLevelFile = (std::filesystem::path(levelFile).parent_path() / "level2.json").string();
-    currentLevelNumber = std::filesystem::path(levelFile).stem() == "test_arena" ? 1 : 2;
+    const std::filesystem::path path(levelFile);
+    campaignDirectory = path.parent_path();
+    const auto stem = path.stem().string();
+    if (stem == "level1") currentLevelNumber = 1;
+    else if (stem == "level2") currentLevelNumber = 2;
+    else if (stem == "level3") currentLevelNumber = 3;
+    else currentLevelNumber = 0;
     std::string loadError;
     if (!initialLevel.load(levelFile, loadError)) {
         std::cerr << loadError << '\n';
