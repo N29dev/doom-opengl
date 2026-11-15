@@ -5,10 +5,11 @@ This is a mechanics *foundation*, not a complete game or final levels.
 
 ## Requirements
 
-- CMake 3.20+ and a C++17 compiler (MSVC, Clang, or GCC)
+- CMake 3.20+ and a C/C++17 toolchain (MSVC, Clang, or GCC)
 - OpenGL 3.3 Core support
 - Git and network access for the first CMake configuration:
-  GLFW 3.4, GLAD 0.1.36, and nlohmann/json 3.11.3 are fetched automatically
+  GLFW 3.4 and nlohmann/json 3.11.3 are fetched automatically.
+- GLAD is compiled from GLFW's pre-generated OpenGL 3.3 bindings. Python is not required to configure, build, or run.
 
 ## Build
 

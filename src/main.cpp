@@ -1,4 +1,5 @@
-#include <glad/glad.h>
+#include <glad/gl.h>
+#define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <array>
@@ -998,7 +999,7 @@ static int run_game(int argc, char** argv) {
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
-    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
+    if (gladLoadGL(glfwGetProcAddress) < GLAD_MAKE_VERSION(3, 3)) {
         std::cerr << "Failed to initialize GLAD.\n";
         glfwDestroyWindow(window);
         glfwTerminate();

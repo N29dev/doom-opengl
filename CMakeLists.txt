@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(DoomOpenGL
 	VERSION 1.0.0
-	LANGUAGES CXX
+	LANGUAGES C CXX
 )
 
 set(CMAKE_CXX_STANDARD 17)
@@ -25,22 +25,20 @@ FetchContent_Declare(
 )
 
 FetchContent_Declare(
-	glad
-	GIT_REPOSITORY https://github.com/Dav1dde/glad.git
-	GIT_TAG v0.1.36
-	GIT_SHALLOW TRUE
-)
-
-FetchContent_Declare(
 	json
 	GIT_REPOSITORY https://github.com/nlohmann/json.git
 	GIT_TAG v3.11.3
 	GIT_SHALLOW TRUE
 )
 
-FetchContent_MakeAvailable(glfw glad json)
+FetchContent_MakeAvailable(glfw json)
 
 find_package(OpenGL REQUIRED)
+
+# GLFW 3.4 already ships pre-generated GLAD 2 bindings for OpenGL 3.3.
+# Compile them directly: no Python interpreter or code-generation step.
+add_library(doom_glad STATIC src/glad_loader.c)
+target_include_directories(doom_glad PUBLIC "${glfw_SOURCE_DIR}/deps")
 
 # Share the exact same JSON validation between the game and the validator.
 add_library(level_core src/Level.cpp)
@@ -48,7 +46,7 @@ target_include_directories(level_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(level_core PUBLIC nlohmann_json::nlohmann_json)
 
 add_executable(doom_opengl src/main.cpp)
-target_link_libraries(doom_opengl PRIVATE glfw glad OpenGL::GL level_core)
+target_link_libraries(doom_opengl PRIVATE glfw doom_glad OpenGL::GL level_core)
 
 # Standalone command-line tool; no OpenGL window or Python needed.
 add_executable(level_validator tools/validate_levels.cpp)
