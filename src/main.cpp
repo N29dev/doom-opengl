@@ -1,4 +1,5 @@
-#include <glad/glad.h>
+#include <glad/gl.h>
+#define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <array>
@@ -151,6 +152,9 @@ namespace {
         bool flying = false;
         bool heavy = false;
         float projectileCooldown = 0.0f;
+        // Visual state only; collision and AI retain their original dimensions.
+        float walkPhase = 0.0f;
+        float walkAmount = 0.0f;
     };
 
     struct Projectile {
@@ -362,6 +366,7 @@ namespace {
                 }
                 continue;
             }
+            const Vec3 beforeMove = enemy.position;
             if (distance > 1.2f && distance < 9.0f) {
                 const float enemySpeed = enemy.heavy ? 0.7f : 2.4f;
                 const float stepX = dx / distance * (enemySpeed * deltaTime);
@@ -371,6 +376,11 @@ namespace {
                 if (!level.circleBlocked(enemy.position.x, enemy.position.z + stepZ, 0.42f))
                     enemy.position.z += stepZ;
             }
+            const Vec3 moved = enemy.position - beforeMove;
+            const float travel = std::sqrt(dot(moved, moved));
+            enemy.walkPhase += travel * (enemy.heavy ? 4.5f : 8.0f);
+            const float moving = travel > 0.0001f ? 1.0f : 0.0f;
+            enemy.walkAmount += (moving - enemy.walkAmount) * std::min(1.0f, deltaTime * 10.0f);
             const float closeX = camera.position.x - enemy.position.x;
             const float closeZ = camera.position.z - enemy.position.z;
             if (damageCooldown <= 0.0f && closeX * closeX + closeZ * closeZ < 1.2f * 1.2f) {
@@ -576,6 +586,8 @@ uniform vec3 light_position;
 uniform vec3 view_position;
 uniform vec3 flashlight_direction;
 uniform bool flashlight_enabled;
+// 0 = environment, 1 = solid model, 2 = view weapon, 3 = luminous detail.
+uniform int material_kind;
 
 out vec4 color;
 
@@ -586,8 +598,15 @@ void main()
         n = -n;
     vec3 baseColor = object_color;
 
-    // Procedural brick pattern on vertical surfaces.
-    if (abs(n.y) < 0.5)
+    // The view weapon is lit in camera space, independently of the level.
+    if (material_kind == 2) {
+        float shade = 0.45 + 0.55 * max(dot(n, normalize(vec3(-0.4, 0.8, 0.5))), 0.0);
+        color = vec4(baseColor * shade, 1.0);
+        return;
+    }
+
+    // Procedural brick pattern only on level surfaces.
+    if (material_kind == 0 && abs(n.y) < 0.5)
     {
         vec2 uv;
 
@@ -608,7 +627,7 @@ void main()
         float brickShade = mix(0.35, 1.15, mortar);
         baseColor *= brickShade;
     }
-    else
+    else if (material_kind == 0)
     {
         // Tile pattern on floor and ceiling.
         vec2 tile = fract(world_position.xz * 1.2);
@@ -649,7 +668,9 @@ void main()
                      * cone * facing * falloff * 3.0;
     }
 
-    color = vec4(ambient + direct + flashlight, 1.0);
+    vec3 lit = ambient + direct + flashlight;
+    if (material_kind == 3) lit = max(lit, baseColor * 0.85);
+    color = vec4(lit, 1.0);
 }
 )";
 
@@ -685,9 +706,7 @@ void main()
         return program;
     }
 
-    void draw_box(GLuint program, GLuint vao, Vec3 position, Vec3 size, Vec3 objectColor) {
-        Mat4 model = model_matrix(position, size);
-
+    void draw_model_box(GLuint program, GLuint vao, const Mat4& model, Vec3 objectColor, int material) {
         glUniformMatrix4fv(
             glGetUniformLocation(program, "model"), 1, GL_FALSE, model.v
         );
@@ -695,10 +714,17 @@ void main()
             glGetUniformLocation(program, "object_color"),
             objectColor.x, objectColor.y, objectColor.z
         );
-
+        glUniform1i(glGetUniformLocation(program, "material_kind"), material);
         glBindVertexArray(vao);
         glDrawArrays(GL_TRIANGLES, 0, 36);
     }
+
+    void draw_box(GLuint program, GLuint vao, Vec3 position, Vec3 size, Vec3 objectColor) {
+        draw_model_box(program, vao, model_matrix(position, size), objectColor, 0);
+    }
+
+    // Model helpers share the existing math and cube mesh, inside this namespace.
+    #include "Models.hpp"
 
     GLuint create_hud_program() {
         const char* vertexSource = R"(#version 330 core
@@ -889,25 +915,6 @@ void main() { color = vec4(ray_color, 1.0); }
         hud.rectangle(0.0f, 0.0f, 0.035f, 0.008f, { 1.0f, 0.86f, 0.62f });
         hud.rectangle(0.0f, 0.0f, 0.008f, 0.035f, { 1.0f, 0.86f, 0.62f });
 
-        const Vec3 weaponColor = selectedWeapon == 2
-            ? Vec3{ 0.28f, 0.20f, 0.12f } : Vec3{ 0.19f, 0.18f, 0.2f };
-        hud.rectangle(0.17f, -0.77f, 0.16f, 0.2f, weaponColor);
-        hud.rectangle(0.19f, -0.9f, 0.1f, 0.16f, { 0.12f, 0.11f, 0.13f });
-        if (selectedWeapon == 2) {
-            hud.rectangle(0.14f, -0.59f, 0.04f, 0.18f, { 0.36f, 0.29f, 0.22f });
-            hud.rectangle(0.19f, -0.59f, 0.04f, 0.18f, { 0.36f, 0.29f, 0.22f });
-        } else {
-            hud.rectangle(0.16f, -0.61f, 0.08f, 0.16f, { 0.34f, 0.32f, 0.33f });
-        }
-        if (shotFlashTimer > 0.0f) {
-            if (selectedWeapon == 2) {
-                hud.rectangle(0.13f, -0.48f, 0.22f, 0.16f, { 1.0f, 0.18f, 0.01f });
-                hud.rectangle(0.16f, -0.47f, 0.16f, 0.12f, { 1.0f, 0.78f, 0.08f });
-            } else {
-                hud.rectangle(0.16f, -0.48f, 0.12f, 0.1f, { 1.0f, 0.72f, 0.12f });
-            }
-        }
-
         const int currentAmmo = selectedWeapon == 2 ? shotgunAmmo : pistolAmmo;
         const int magazineSize = selectedWeapon == 2 ? 2 : 10;
         const Vec3 ammoColor = selectedWeapon == 2
@@ -992,7 +999,7 @@ static int run_game(int argc, char** argv) {
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
-    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
+    if (gladLoadGL(glfwGetProcAddress) < GLAD_MAKE_VERSION(3, 3)) {
         std::cerr << "Failed to initialize GLAD.\n";
         glfwDestroyWindow(window);
         glfwTerminate();
@@ -1140,13 +1147,21 @@ static int run_game(int argc, char** argv) {
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     double previous = glfwGetTime();
+    float weaponBobPhase = 0.0f;
+    float weaponBobAmount = 0.0f;
 
     while (!glfwWindowShouldClose(window)) {
         double now = glfwGetTime();
         float deltaTime = std::min(static_cast<float>(now - previous), 0.1f);
         previous = now;
 
+        const Vec3 beforeInput = camera.position;
         input(window, deltaTime);
+        const Vec3 motion = camera.position - beforeInput;
+        const float travel = std::sqrt(motion.x * motion.x + motion.z * motion.z);
+        const bool walking = travel > 0.0001f && travel < 1.5f && camera.onGround;
+        if (walking) weaponBobPhase += travel * 7.0f;
+        weaponBobAmount += ((walking ? 1.0f : 0.0f) - weaponBobAmount) * std::min(1.0f, deltaTime * 12.0f);
 
         int width = 1;
         int height = 1;
@@ -1204,22 +1219,15 @@ static int run_game(int argc, char** argv) {
                 const float x = level.worldX(column);
                 const float z = level.worldZ(row);
                 if (level.isSolid(column, row)) {
-                    const Vec3 wallColor = tile == 'D'
-                        ? Vec3{0.48f, 0.35f, 0.09f}
-                        : Vec3{0.30f, 0.08f, 0.09f};
-                    draw_box(program, vao, {x, 2.25f, z},
-                             {Level::kTileSize, 4.5f, Level::kTileSize}, wallColor);
+                    if (tile == 'D') draw_door_model(program, vao, {x, 2.25f, z});
+                    else draw_box(program, vao, {x, 2.25f, z},
+                                  {Level::kTileSize, 4.5f, Level::kTileSize}, {0.30f, 0.08f, 0.09f});
                 }
-                if (tile == 'H' && !level.isHealthCollected(column, row)) {
-                    draw_box(program, vao, {x, 0.5f, z},
-                             {0.6f, 0.6f, 0.6f}, {0.08f, 0.7f, 0.30f});
-                }
-                if (tile == 'S' && !level.isShotgunCollected(column, row)) {
-                    draw_box(program, vao, {x, 0.45f, z},
-                             {1.0f, 0.35f, 0.35f}, {0.75f, 0.42f, 0.08f});
-                    draw_box(program, vao, {x, 0.68f, z},
-                             {0.18f, 0.18f, 0.9f}, {0.2f, 0.2f, 0.22f});
-                }
+                const float time = static_cast<float>(now);
+                if (tile == 'H' && !level.isHealthCollected(column, row))
+                    draw_medkit_model(program, vao, {x, 0.50f, z}, time);
+                if (tile == 'S' && !level.isShotgunCollected(column, row))
+                    draw_shotgun_pickup(program, vao, {x, 0.52f, z}, time);
                 if (tile == 'X') {
                     draw_box(program, vao, {x, 0.04f, z},
                              {1.4f, 0.08f, 1.4f}, {0.09f, 0.65f, 0.5f});
@@ -1229,33 +1237,30 @@ static int run_game(int argc, char** argv) {
 
         for (const Enemy& enemy : enemies) {
             if (enemy.health <= 0) continue;
-            float healthRatio = std::clamp(enemy.health / (enemy.heavy ? 1000.0f : 100.0f), 0.0f, 1.0f);
-            if (enemy.heavy) {
-                draw_box(program, vao, enemy.position, enemy.size,
-                         {0.04f, 0.18f + 0.35f * healthRatio, 0.95f});
-                draw_box(program, vao, enemy.position + Vec3{0.0f, 1.65f, 0.0f},
-                         {0.7f, 0.45f, 0.7f}, {0.08f, 0.35f, 1.0f});
-            } else if (enemy.flying) {
-                draw_box(program, vao, enemy.position, enemy.size,
-                         {0.45f + 0.35f * healthRatio, 0.04f, 0.8f});
-                draw_box(program, vao,
-                         enemy.position + Vec3{-0.75f, 0.0f, 0.0f},
-                         {0.55f, 0.18f, 0.75f}, {0.28f, 0.02f, 0.55f});
-                draw_box(program, vao,
-                         enemy.position + Vec3{0.75f, 0.0f, 0.0f},
-                         {0.55f, 0.18f, 0.75f}, {0.28f, 0.02f, 0.55f});
-            } else {
-                draw_box(program, vao, enemy.position, enemy.size,
-                         {0.35f + 0.45f * healthRatio, 0.04f, 0.03f});
-            }
+            const Vec3 toward = camera.position - enemy.position;
+            const float facing = std::atan2(toward.x, toward.z);
+            const float maxHealth = enemy.heavy ? 1000.0f : (enemy.flying ? 120.0f : 180.0f);
+            const float health = std::clamp(enemy.health / maxHealth, 0.0f, 1.0f);
+            if (enemy.heavy)
+                draw_heavy_model(program, vao, enemy.position, facing, health, enemy.walkPhase, enemy.walkAmount);
+            else if (enemy.flying)
+                draw_flying_model(program, vao, enemy.position, facing, health, static_cast<float>(now));
+            else
+                draw_demon_model(program, vao, enemy.position, facing, health, enemy.walkPhase, enemy.walkAmount);
         }
 
-        for (const Projectile& projectile : projectiles) {
-            draw_box(program, vao, projectile.position,
-                     {0.28f, 0.28f, 0.28f}, {0.95f, 0.04f, 0.9f});
-        }
+        for (const Projectile& projectile : projectiles)
+            draw_projectile_model(program, vao, projectile.position, static_cast<float>(now));
 
         rayRenderer.draw(view, projection);
+
+        // A separate depth pass keeps the first-person weapon in front of the world.
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glUseProgram(program);
+        const Mat4 weaponView = identity();
+        glUniformMatrix4fv(glGetUniformLocation(program, "view"), 1, GL_FALSE, weaponView.v);
+        draw_view_weapon(program, vao, selectedWeapon == 2, weaponBobPhase, weaponBobAmount,
+                         shotFlashTimer, reloadTimer / reloadDuration);
         draw_hud(hud);
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, pixelFbo);
