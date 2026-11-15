@@ -31,7 +31,22 @@ FetchContent_Declare(
 	GIT_SHALLOW TRUE
 )
 
-FetchContent_MakeAvailable(glfw json)
+# Native audio playback; no Python or runtime asset pack.
+FetchContent_Declare(
+    miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+    GIT_TAG 0.11.21
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR unused-cmake-directory
+)
+FetchContent_MakeAvailable(glfw json miniaudio)
+find_package(Threads REQUIRED)
+add_library(doom_audio STATIC src/Audio.cpp src/miniaudio_impl.c)
+target_include_directories(doom_audio PRIVATE "${miniaudio_SOURCE_DIR}")
+target_link_libraries(doom_audio PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+if(UNIX AND NOT APPLE)
+    target_link_libraries(doom_audio PRIVATE m)
+endif()
 
 find_package(OpenGL REQUIRED)
 
@@ -46,7 +61,7 @@ target_include_directories(level_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(level_core PUBLIC nlohmann_json::nlohmann_json)
 
 add_executable(doom_opengl src/main.cpp)
-target_link_libraries(doom_opengl PRIVATE glfw doom_glad OpenGL::GL level_core)
+target_link_libraries(doom_opengl PRIVATE glfw doom_glad OpenGL::GL level_core doom_audio)
 
 # Standalone command-line tool; no OpenGL window or Python needed.
 add_executable(level_validator tools/validate_levels.cpp)

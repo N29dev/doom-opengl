@@ -44,7 +44,9 @@ You can also start from the build directory because CMake copies all included ma
 | R | Reload |
 | T | Restart level |
 | Ctrl | Slide |
-| 1 / 2 | Switch weapons |
+| 1 / 2 | Pistol / shotgun (after pickup) |
+| Q / mouse wheel | Cycle unlocked weapons |
+| M | Mute / unmute sound effects |
 | Esc | Exit |
 
 The simple enemies move directly toward you when close enough. This is intentionally **not** full AI.
@@ -57,7 +59,7 @@ Launch the game without arguments to play the campaign in order:
 2. **Molten Foundry** — lava channels with safe walkable bridges and a flying enemy.
 3. **Inferno Ascent** — broad floating platforms over lava, gentle height progression, and a raised exit.
 
-Touch the exit to load the next level; the third exit completes the campaign.
+Eliminate every enemy to unlock the exit (red becomes green); touch the unlocked exit to progress. The third exit completes the campaign.
 Health and inventory reset at each stage, with new pickups provided.
 Use T to restart the current stage.
 
@@ -146,6 +148,10 @@ shape and non-wall connectivity, not whether each possible jump is feasible.
 Playtest exported levels. Custom maps with names other than level1.json, level2.json and level3.json finish at their own exit.
 Run `ctest --test-dir build -C Release --output-on-failure` for collision tests.
 
+## Audio
+
+Original retro sound effects are synthesized at startup and played by miniaudio 0.11.21 (fetched at configuration). No external audio files or Python are required. If audio initialization fails, gameplay continues silently. M toggles sound.
+
 ## Graphics already present
 
 Perspective FPS camera, OpenGL VAO/VBO meshes, shader-based procedural brick/tile
@@ -169,7 +175,7 @@ present in the assets/levels directory before starting the game.
 
 - Design additional levels, artwork and textures
 - More advanced enemy AI, pathfinding, and additional enemies
-- More sophisticated weapons, sound, and objectives
+- More sophisticated weapons, music, and objectives
 - Graphics/debug views, visual polishing, performance optimization
 - Final report, demo, and exam presentation
 

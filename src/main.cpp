@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include "Level.hpp"
+#include "Audio.hpp"
 
 namespace {
     struct Vec3 {
@@ -176,6 +177,26 @@ namespace {
     bool gameWon = false;
     bool interactKeyHeld = false;
     bool restartKeyHeld = false;
+    bool qHeld = false, muteHeld = false;
+    int pendingScroll = 0;
+    bool exitWasTouched = false, exitWasUnlocked = false;
+    float exitNotice = 0.0f, stepDistance = 0.0f, weaponSwitchTimer = 0.0f;
+
+    int enemies_remaining() {
+        return static_cast<int>(std::count_if(enemies.begin(), enemies.end(), [](const Enemy& e) { return e.health > 0; }));
+    }
+    void select_weapon(int weapon) {
+        if (weapon == selectedWeapon || (weapon == 2 && !shotgunUnlocked)) return;
+        reloadTimer = 0.0f;
+        reloadingWeapon = 0;
+        shotFlashTimer = 0.0f;
+        selectedWeapon = weapon;
+        weaponSwitchTimer = 0.16f;
+        audio::play(audio::Sound::Switch);
+    }
+    void scroll_callback(GLFWwindow*, double, double y) {
+        if (y != 0.0) pendingScroll = y > 0.0 ? 1 : -1;
+    }
 
     void reset_game() {
         level = initialLevel; // Copy the immutable template, including closed doors and uncollected pickups.
@@ -212,6 +233,10 @@ namespace {
         reloadTimer = 0.0f;
         reloadingWeapon = 0;
         gameWon = false;
+        exitWasTouched = false;
+        exitWasUnlocked = enemies.empty();
+        exitNotice = stepDistance = weaponSwitchTimer = 0.0f;
+        pendingScroll = 0;
         previousSpacePressed = false;
         previousFirePressed = false;
         previousSlidePressed = false;
@@ -250,7 +275,12 @@ namespace {
             std::cout << "Level restarted.\n";
         }
         restartKeyHeld = restartPressed;
-        if (playerHealth <= 0 || gameWon) return;
+        const bool mutePressed = glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS;
+        if (mutePressed && !muteHeld) audio::toggleMute();
+        muteHeld = mutePressed;
+        if (playerHealth <= 0 || gameWon) { pendingScroll = 0; return; }
+        weaponSwitchTimer = std::max(0.0f, weaponSwitchTimer - deltaTime);
+        exitNotice = std::max(0.0f, exitNotice - deltaTime);
 
         if (reloadTimer > 0.0f) {
             reloadTimer = std::max(0.0f, reloadTimer - deltaTime);
@@ -267,6 +297,7 @@ namespace {
             (selectedWeapon == 1 || shotgunUnlocked)) {
             reloadingWeapon = selectedWeapon;
             reloadTimer = reloadDuration;
+            audio::play(audio::Sound::Reload);
             std::cout << "Reloading...\n";
         }
         reloadKeyHeld = reloadPressed;
@@ -275,14 +306,19 @@ namespace {
         if (fPressed && !flashlightKeyHeld) flashlightEnabled = !flashlightEnabled;
         flashlightKeyHeld = fPressed;
 
-        if (reloadTimer <= 0.0f) {
-            if (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS) selectedWeapon = 1;
-            if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS && shotgunUnlocked) selectedWeapon = 2;
-        }
+        const bool qPressed = glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS;
+        if (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS) select_weapon(1);
+        else if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS) select_weapon(2);
+        else if (((qPressed && !qHeld) || pendingScroll != 0) && shotgunUnlocked)
+            select_weapon(selectedWeapon == 1 ? 2 : 1);
+        qHeld = qPressed;
+        pendingScroll = 0;
 
         const bool ePressed = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
-        if (ePressed && !interactKeyHeld && level.toggleNearbyDoor(camera.position.x, camera.position.z))
+        if (ePressed && !interactKeyHeld && level.toggleNearbyDoor(camera.position.x, camera.position.z)) {
+            audio::play(audio::Sound::Door);
             std::cout << "Door toggled.\n";
+        }
         interactKeyHeld = ePressed;
 
         const Vec3 front = camera.front();
@@ -302,6 +338,7 @@ namespace {
             dot(movement, movement) > 0.0f && slideCooldown <= 0.0f) {
             slideTimer = 0.45f;
             slideCooldown = 1.0f;
+            audio::play(audio::Sound::Slide);
         }
         previousSlidePressed = slidePressed;
 
@@ -310,6 +347,7 @@ namespace {
             camera.verticalVelocity = 6.5f;
             camera.onGround = false;
             ++camera.jumpsUsed;
+            audio::play(audio::Sound::Jump);
         }
         previousSpacePressed = spacePressed;
 
@@ -318,6 +356,7 @@ namespace {
         const Vec3 velocity = normalize(movement) * speed;
         const int steps = std::max(1, static_cast<int>(std::ceil(deltaTime * 120.0f)));
         const float dt = deltaTime / steps;
+        const Vec3 beforeMovement = camera.position;
         for (int i = 0; i < steps; ++i) {
             float feet = camera.position.y - playerEyeHeight;
             const float head = feet + playerBodyHeight;
@@ -331,9 +370,11 @@ namespace {
             const float nextFeet = feet + camera.verticalVelocity * dt - 9.0f * dt * dt;
             camera.verticalVelocity -= 18.0f * dt;
             float contact = 0.0f;
+            const bool wasGrounded = camera.onGround;
             camera.onGround = false;
             if (nextFeet <= feet && level.landingHeight(camera.position.x, camera.position.z, playerRadius,
                                                         feet, nextFeet, contact)) {
+                if (!wasGrounded && camera.verticalVelocity < -2.0f) audio::play(audio::Sound::Land);
                 feet = contact;
                 camera.verticalVelocity = 0.0f;
                 camera.onGround = true;
@@ -348,26 +389,34 @@ namespace {
             camera.position.y = feet + playerEyeHeight;
             if (feet < -1.25f) {
                 playerHealth = 0;
+                audio::play(audio::Sound::Death);
                 std::cout << "Fell into lava. Press T to restart.\n";
                 glfwSetWindowTitle(window, "YOU DIED - press T to restart");
                 return;
             }
         }
 
+        if (camera.onGround && slideTimer <= 0.0f) {
+            const Vec3 moved = camera.position - beforeMovement;
+            stepDistance += std::sqrt(moved.x*moved.x + moved.z*moved.z);
+            if (stepDistance >= 1.65f) { stepDistance -= 1.65f; audio::play(audio::Sound::Step, 0.8f); }
+        }
         const bool firePressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
         if (firePressed && !previousFirePressed) fire_weapon();
         previousFirePressed = firePressed;
 
         if (level.collectNearbyShotgun(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight)) {
             shotgunUnlocked = true;
-            selectedWeapon = 2;
-            std::cout << "Picked up shotgun. Press 1/2 to switch weapons.\n";
+            select_weapon(2);
+            audio::play(audio::Sound::Pickup);
+            std::cout << "Picked up shotgun. Press 1/2, Q, or scroll to switch.\n";
         }
 
         damageCooldown = std::max(0.0f, damageCooldown - deltaTime);
         shotFlashTimer = std::max(0.0f, shotFlashTimer - deltaTime);
         if (playerHealth < 100 && level.collectNearbyHealth(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight)) {
             playerHealth = std::min(100, playerHealth + 35);
+            audio::play(audio::Sound::Pickup);
             std::cout << "Picked up health. Current health: " << playerHealth << '\n';
         }
 
@@ -392,6 +441,7 @@ namespace {
                 if (enemy.projectileCooldown <= 0.0f && distance < 24.0f) {
                     projectiles.push_back({enemy.position, normalize(camera.position - enemy.position) * 8.0f, 6.0f});
                     enemy.projectileCooldown = 2.0f;
+                    audio::play(audio::Sound::EnemyFire, std::clamp(1.0f - distance/27.0f,0.15f,0.8f));
                 }
                 continue;
             }
@@ -423,6 +473,7 @@ namespace {
                 const int contactDamage = enemy.heavy ? 45 : 10;
                 playerHealth = std::max(0, playerHealth - contactDamage);
                 damageCooldown = 1.0f;
+                audio::play(playerHealth == 0 ? audio::Sound::Death : audio::Sound::Hurt);
                 if (playerHealth == 0) {
                     std::cout << "You died. Press T to restart.\n";
                     glfwSetWindowTitle(window, "YOU DIED - press T to restart");
@@ -445,6 +496,7 @@ namespace {
                 playerHealth = std::max(0, playerHealth - 35);
                 projectile.lifetime = 0.0f;
                 damageCooldown = 0.4f;
+                audio::play(playerHealth == 0 ? audio::Sound::Death : audio::Sound::Hurt);
                 std::cout << "Flying enemy projectile hit you for 35 damage.\n";
                 if (playerHealth == 0) {
                     std::cout << "You died. Press T to restart.\n";
@@ -457,7 +509,22 @@ namespace {
                 [](const Projectile& projectile) { return projectile.lifetime <= 0.0f; }),
             projectiles.end());
 
-        if (playerHealth > 0 && level.reachedExit(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight)) {
+        const int remaining = enemies_remaining();
+        if (!exitWasUnlocked && remaining == 0) {
+            exitWasUnlocked = true;
+            audio::play(audio::Sound::Clear);
+            std::cout << "All enemies eliminated. Exit unlocked!\n";
+        }
+        const bool atExit = level.reachedExit(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight);
+        if (playerHealth > 0 && atExit && remaining > 0) {
+            if (!exitWasTouched) {
+                audio::play(audio::Sound::Locked);
+                std::cout << "Exit locked: " << remaining << " enemies remaining.\n";
+            }
+            exitNotice = 1.0f;
+        }
+        exitWasTouched = atExit;
+        if (playerHealth > 0 && atExit && remaining == 0) {
             if (currentLevelNumber >= 1 && currentLevelNumber < 3) {
                 const int nextNumber = currentLevelNumber + 1;
                 const auto nextFile = campaignDirectory / ("level" + std::to_string(nextNumber) + ".json");
@@ -469,12 +536,14 @@ namespace {
                 } else {
                     currentLevelNumber = nextNumber;
                     reset_game();
+                    audio::play(audio::Sound::Finish);
                     const std::string title = "DOOM OpenGL | Level " + std::to_string(currentLevelNumber) + " / 3";
                     std::cout << title << '\n';
                     glfwSetWindowTitle(window, title.c_str());
                 }
             } else {
                 gameWon = true;
+                audio::play(audio::Sound::Finish);
                 const char* title = currentLevelNumber == 3 ? "CAMPAIGN COMPLETE - press T to restart level" : "LEVEL COMPLETE - press T to restart";
                 std::cout << title << '\n';
                 glfwSetWindowTitle(window, title);
@@ -517,13 +586,15 @@ namespace {
     }
 
     void fire_weapon() {
-        if (reloadTimer > 0.0f) return;
+        if (reloadTimer > 0.0f || weaponSwitchTimer > 0.0f) return;
         int& ammo = selectedWeapon == 2 ? shotgunAmmo : pistolAmmo;
         if (ammo <= 0) {
+            audio::play(audio::Sound::Dry);
             std::cout << "Magazine empty. Press R to reload.\n";
             return;
         }
         --ammo;
+        audio::play(selectedWeapon == 2 ? audio::Sound::Shotgun : audio::Sound::Pistol);
         shotFlashTimer = selectedWeapon == 2 ? 0.18f : 0.12f;
         const float range = selectedWeapon == 2 ? 14.0f : weaponRange;
         const Vec3 front = camera.front();
@@ -537,6 +608,7 @@ namespace {
                 normalize(front + right * 0.06f + up * 0.08f), front}
             : std::array<Vec3, 5>{front, front, front, front, front};
 
+        bool hitAny = false, killedAny = false;
         for (std::size_t rayIndex = 0; rayIndex < directions.size(); ++rayIndex) {
             const Vec3 direction = directions[rayIndex];
             rayEnds[rayIndex] = camera.position + direction * range;
@@ -583,11 +655,16 @@ namespace {
                 const float distanceFactor = std::clamp(1.0f - nearestHit / range, 0.0f, 1.0f);
                 const int damage = selectedWeapon == 2
                     ? static_cast<int>(12.0f + 43.0f * distanceFactor) : 34;
+                hitAny = true;
                 enemies[hitEnemy].health = std::max(0, enemies[hitEnemy].health - damage);
-                if (enemies[hitEnemy].health == 0)
+                if (enemies[hitEnemy].health == 0) {
+                    killedAny = true;
                     std::cout << "Enemy eliminated.\n";
+                }
             }
         }
+        if (killedAny) audio::play(audio::Sound::Kill);
+        else if (hitAny) audio::play(audio::Sound::Hit);
     }
 
     GLuint compile_shader(GLenum type, const char* source) {
@@ -1057,6 +1134,7 @@ static int run_game(int argc, char** argv) {
 
     glfwMakeContextCurrent(window);
     glfwSetCursorPosCallback(window, mouse_callback);
+    glfwSetScrollCallback(window, scroll_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     if (gladLoadGL(glfwGetProcAddress) < GLAD_MAKE_VERSION(3, 3)) {
@@ -1206,6 +1284,7 @@ static int run_game(int argc, char** argv) {
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (!audio::initialize()) std::cerr << "Audio device unavailable; continuing silently.\n";
     double previous = glfwGetTime();
     float weaponBobPhase = 0.0f;
     float weaponBobAmount = 0.0f;
@@ -1308,8 +1387,10 @@ static int run_game(int argc, char** argv) {
                 if (tile == 'S' && !level.isShotgunCollected(column, row))
                     draw_shotgun_pickup(program, vao, {x, y + 0.52f, z}, time);
                 if (tile == 'X') {
-                    draw_box(program, vao, {x, y + 0.04f, z},
-                             {1.4f, 0.08f, 1.4f}, {0.09f, 0.65f, 0.5f});
+                    const Vec3 exitColor = exitWasUnlocked ? Vec3{0.10f,0.88f,0.46f} : Vec3{0.90f,0.08f,0.05f};
+                    draw_model_box(program,vao,model_matrix({x,y+0.04f,z},{1.4f,0.08f,1.4f}),exitColor,3);
+                    for (int side : {-1,1})
+                        draw_model_box(program,vao,model_matrix({x+side*0.63f,y+0.65f,z},{0.11f,1.3f,0.11f}),exitColor,3);
                 }
             }
         }
@@ -1350,7 +1431,7 @@ static int run_game(int argc, char** argv) {
         const Mat4 weaponView = identity();
         glUniformMatrix4fv(glGetUniformLocation(program, "view"), 1, GL_FALSE, weaponView.v);
         draw_view_weapon(program, vao, selectedWeapon == 2, weaponBobPhase, weaponBobAmount,
-                         shotFlashTimer, reloadTimer / reloadDuration);
+                         shotFlashTimer, std::max(reloadTimer / reloadDuration, weaponSwitchTimer / 0.32f));
         draw_hud(hud);
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, pixelFbo);
@@ -1365,6 +1446,7 @@ static int run_game(int argc, char** argv) {
         glfwPollEvents();
     }
 
+    audio::shutdown();
     glDeleteRenderbuffers(1, &pixelDepth);
     glDeleteTextures(1, &pixelColor);
     glDeleteFramebuffers(1, &pixelFbo);
