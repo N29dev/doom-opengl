@@ -154,6 +154,8 @@ bool Level::load(const std::string& filePath, std::string& error) {
         hasLava_ = std::any_of(tiles.begin(), tiles.end(), [](const std::string& row) {
             return row.find('~') != std::string::npos;
         });
+        surfaceHeights_.assign(static_cast<std::size_t>(newWidth) * mapHeight, 0.0f);
+        for (const auto& p : newPlatforms) surfaceHeights_[p.row * newWidth + p.column] = p.top;
         platforms_ = std::move(newPlatforms);
         ceilingHeight_ = newCeiling;
         tiles_ = std::move(tiles);
@@ -248,9 +250,8 @@ bool Level::overlapsTile(float x, float z, float radius, int column, int row) co
 }
 
 float Level::surfaceAt(int column, int row) const {
-    for (const auto& p : platforms_)
-        if (p.column == column && p.row == row) return p.top;
-    return 0.0f;
+    return column >= 0 && column < width() && row >= 0 && row < height()
+        ? surfaceHeights_[index(column,row)] : 0.0f;
 }
 
 bool Level::nearSurface(float feet, int column, int row) const {

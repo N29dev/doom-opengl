@@ -52,7 +52,7 @@ The simple enemies move directly toward you when close enough. This is intention
 ## Level maker & test arena
 
 Open [`tools/level-maker.html`](tools/level-maker.html) in any browser. It works offline.
-Choose a tile type, click/drag to paint the grid, then **Export JSON**.
+Choose a tile or platform brush, click/drag to paint the grid, inspect the orbitable 3D preview, then **Export JSON**. Use the platform brush to set a top height and bottom height independently of the tile/entity. Undo/redo and the built-in sample are available.
 Copy the JSON into `assets/levels/` and launch the game with its file path:
 
 ```bash
@@ -116,7 +116,7 @@ Try the included Inferno Escape sample:
 ./build/doom_opengl assets/levels/platforming.json
 ```
 
-Windows: ` .\\build\\Release\\doom_opengl.exe assets/levels/platforming.json ` (remove the surrounding spaces).
+Windows: `.\build\Release\doom_opengl.exe assets/levels/platforming.json`.
 
 The optional `ceilingHeight` is in world units (4.5–32, default 4.5).
 The optional `platforms` array contains objects like

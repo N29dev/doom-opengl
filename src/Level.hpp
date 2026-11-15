@@ -66,6 +66,7 @@ private:
     std::vector<bool> collectedShotgun_;
     GridPosition spawn_;
     std::vector<Platform> platforms_;
+    std::vector<float> surfaceHeights_;
     float ceilingHeight_ = 4.5f;
     bool hasLava_ = false;
     bool overlapsTile(float x, float z, float radius, int column, int row) const;
