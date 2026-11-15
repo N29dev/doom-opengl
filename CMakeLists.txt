@@ -79,3 +79,13 @@ configure_file(
 	"${CMAKE_CURRENT_BINARY_DIR}/assets/levels/level2.json"
 	COPYONLY
 )
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/levels/platforming.json"
+    "${CMAKE_CURRENT_BINARY_DIR}/assets/levels/platforming.json"
+    COPYONLY
+)
+enable_testing()
+add_executable(platform_tests tools/platform_tests.cpp)
+target_link_libraries(platform_tests PRIVATE level_core)
+add_test(NAME platform_collision COMMAND platform_tests "${CMAKE_CURRENT_SOURCE_DIR}/assets/levels/platforming.json")

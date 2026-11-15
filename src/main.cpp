@@ -142,6 +142,9 @@ namespace {
     int reloadingWeapon = 0;
     constexpr float reloadDuration = 0.4f;
     constexpr float weaponRange = 24.0f;
+    constexpr float playerEyeHeight = 1.4f;
+    constexpr float playerBodyHeight = 1.6f;
+    constexpr float playerRadius = 0.33f;
     Vec3 rayEnd{};
     std::array<Vec3, 5> rayEnds{};
 
@@ -155,6 +158,7 @@ namespace {
         // Visual state only; collision and AI retain their original dimensions.
         float walkPhase = 0.0f;
         float walkAmount = 0.0f;
+        float flightBase = 0.0f;
     };
 
     struct Projectile {
@@ -178,18 +182,19 @@ namespace {
         enemies.clear();
         projectiles.clear();
         for (const GridPosition pos : level.positions('M')) {
-            enemies.push_back({ {level.worldX(pos.column), 0.9f, level.worldZ(pos.row)},
+            enemies.push_back({ {level.worldX(pos.column), level.surfaceAt(pos.column, pos.row) + 0.9f, level.worldZ(pos.row)},
                                 {0.8f, 1.8f, 0.8f}, 180, false, false, 0.0f });
         }
         for (const GridPosition pos : level.positions('F')) {
-            enemies.push_back({ {level.worldX(pos.column), 3.2f, level.worldZ(pos.row)},
+            enemies.push_back({ {level.worldX(pos.column), level.surfaceAt(pos.column, pos.row) + 3.2f, level.worldZ(pos.row)},
                                 {1.1f, 0.9f, 1.1f}, 120, true, false, 0.8f });
         }
         for (const GridPosition pos : level.positions('B')) {
-            enemies.push_back({ {level.worldX(pos.column), 1.5f, level.worldZ(pos.row)},
+            enemies.push_back({ {level.worldX(pos.column), level.surfaceAt(pos.column, pos.row) + 1.5f, level.worldZ(pos.row)},
                                 {1.8f, 3.0f, 1.8f}, 1000, false, true, 0.0f });
         }
-        camera.position = {level.spawnX(), 1.4f, level.spawnZ()};
+        for (auto& enemy : enemies) if (enemy.flying) enemy.flightBase = enemy.position.y;
+        camera.position = {level.spawnX(), level.spawnFloor() + playerEyeHeight, level.spawnZ()};
         camera.yaw = 0.0f;
         camera.pitch = 0.0f;
         camera.verticalVelocity = 0.0f;
@@ -300,39 +305,60 @@ namespace {
         }
         previousSlidePressed = slidePressed;
 
-        // Separate X/Z collision allows the player to slide along a wall.
-        if (dot(movement, movement) > 0.0f) {
-            const float movementSpeed = slideTimer > 0.0f ? 10.5f : 4.5f;
-            movement = normalize(movement) * (movementSpeed * deltaTime);
-            constexpr float playerRadius = 0.33f;
-            if (!level.circleBlocked(camera.position.x + movement.x, camera.position.z, playerRadius))
-                camera.position.x += movement.x;
-            if (!level.circleBlocked(camera.position.x, camera.position.z + movement.z, playerRadius))
-                camera.position.z += movement.z;
-        }
-
         const bool spacePressed = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
-        if (spacePressed && !previousSpacePressed &&
-            (camera.onGround || camera.jumpsUsed < 2)) {
+        if (spacePressed && !previousSpacePressed && (camera.onGround || camera.jumpsUsed < 2)) {
             camera.verticalVelocity = 6.5f;
             camera.onGround = false;
             ++camera.jumpsUsed;
         }
         previousSpacePressed = spacePressed;
 
+        // Small integration steps prevent tunneling through platform sides and undersides.
+        const float speed = slideTimer > 0.0f ? 10.5f : 4.5f;
+        const Vec3 velocity = normalize(movement) * speed;
+        const int steps = std::max(1, static_cast<int>(std::ceil(deltaTime * 120.0f)));
+        const float dt = deltaTime / steps;
+        for (int i = 0; i < steps; ++i) {
+            float feet = camera.position.y - playerEyeHeight;
+            const float head = feet + playerBodyHeight;
+            const float nx = camera.position.x + velocity.x * dt;
+            if (!level.bodyBlocked(nx, camera.position.z, playerRadius, feet, head))
+                camera.position.x = nx;
+            const float nz = camera.position.z + velocity.z * dt;
+            if (!level.bodyBlocked(camera.position.x, nz, playerRadius, feet, head))
+                camera.position.z = nz;
+
+            const float nextFeet = feet + camera.verticalVelocity * dt - 9.0f * dt * dt;
+            camera.verticalVelocity -= 18.0f * dt;
+            float contact = 0.0f;
+            camera.onGround = false;
+            if (nextFeet <= feet && level.landingHeight(camera.position.x, camera.position.z, playerRadius,
+                                                        feet, nextFeet, contact)) {
+                feet = contact;
+                camera.verticalVelocity = 0.0f;
+                camera.onGround = true;
+                camera.jumpsUsed = 0;
+            } else if (nextFeet > feet && level.ceilingLimit(camera.position.x, camera.position.z, playerRadius,
+                                                               head, nextFeet + playerBodyHeight, contact)) {
+                feet = contact - playerBodyHeight;
+                camera.verticalVelocity = 0.0f;
+            } else {
+                feet = nextFeet;
+            }
+            camera.position.y = feet + playerEyeHeight;
+            if (feet < -1.25f) {
+                playerHealth = 0;
+                std::cout << "Fell into lava. Press T to restart.\n";
+                glfwSetWindowTitle(window, "YOU DIED - press T to restart");
+                return;
+            }
+        }
+
         const bool firePressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
         if (firePressed && !previousFirePressed) fire_weapon();
         previousFirePressed = firePressed;
 
-        camera.position.y += camera.verticalVelocity * deltaTime;
-        camera.verticalVelocity -= 18.0f * deltaTime;
-        if (camera.position.y <= 1.4f) {
-            camera.position.y = 1.4f;
-            camera.verticalVelocity = 0.0f;
-            camera.onGround = true;
-            camera.jumpsUsed = 0;
-        }
-        if (level.collectNearbyShotgun(camera.position.x, camera.position.z)) {
+        if (level.collectNearbyShotgun(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight)) {
             shotgunUnlocked = true;
             selectedWeapon = 2;
             std::cout << "Picked up shotgun. Press 1/2 to switch weapons.\n";
@@ -340,7 +366,7 @@ namespace {
 
         damageCooldown = std::max(0.0f, damageCooldown - deltaTime);
         shotFlashTimer = std::max(0.0f, shotFlashTimer - deltaTime);
-        if (playerHealth < 100 && level.collectNearbyHealth(camera.position.x, camera.position.z)) {
+        if (playerHealth < 100 && level.collectNearbyHealth(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight)) {
             playerHealth = std::min(100, playerHealth + 35);
             std::cout << "Picked up health. Current health: " << playerHealth << '\n';
         }
@@ -354,11 +380,14 @@ namespace {
             const float distance = std::sqrt(dx * dx + dz * dz);
             if (enemy.flying) {
                 enemy.projectileCooldown -= deltaTime;
-                const float targetY = 3.2f + std::sin(static_cast<float>(glfwGetTime()) + enemy.position.x) * 0.35f;
+                const float targetY = enemy.flightBase + std::sin(static_cast<float>(glfwGetTime()) + enemy.position.x) * 0.35f;
                 enemy.position.y += (targetY - enemy.position.y) * std::min(1.0f, deltaTime * 2.0f);
                 if (distance > 5.0f && distance < 22.0f) {
                     const Vec3 aim = normalize(camera.position - enemy.position);
-                    enemy.position = enemy.position + Vec3{aim.x, 0.0f, aim.z} * (0.9f * deltaTime);
+                    const Vec3 next = enemy.position + Vec3{aim.x, 0.0f, aim.z} * (0.9f * deltaTime);
+                    if (!level.hasPlatforming() || !level.bodyBlocked(next.x, next.z, 0.42f,
+                            next.y - enemy.size.y * 0.5f, next.y + enemy.size.y * 0.5f))
+                        enemy.position = next;
                 }
                 if (enemy.projectileCooldown <= 0.0f && distance < 24.0f) {
                     projectiles.push_back({enemy.position, normalize(camera.position - enemy.position) * 8.0f, 6.0f});
@@ -371,10 +400,15 @@ namespace {
                 const float enemySpeed = enemy.heavy ? 0.7f : 2.4f;
                 const float stepX = dx / distance * (enemySpeed * deltaTime);
                 const float stepZ = dz / distance * (enemySpeed * deltaTime);
-                if (!level.circleBlocked(enemy.position.x + stepX, enemy.position.z, 0.42f))
-                    enemy.position.x += stepX;
-                if (!level.circleBlocked(enemy.position.x, enemy.position.z + stepZ, 0.42f))
-                    enemy.position.z += stepZ;
+                const float feet = enemy.position.y - enemy.size.y * 0.5f;
+                const auto canMove = [&](float x, float z) {
+                    if (!level.hasPlatforming()) return !level.circleBlocked(x,z,0.42f);
+                    float support = 0.0f;
+                    return !level.bodyBlocked(x,z,0.42f,feet,feet + enemy.size.y) &&
+                           level.landingHeight(x,z,0.12f,feet + 0.005f,feet - 0.005f,support);
+                };
+                if (canMove(enemy.position.x + stepX, enemy.position.z)) enemy.position.x += stepX;
+                if (canMove(enemy.position.x, enemy.position.z + stepZ)) enemy.position.z += stepZ;
             }
             const Vec3 moved = enemy.position - beforeMove;
             const float travel = std::sqrt(dot(moved, moved));
@@ -383,7 +417,9 @@ namespace {
             enemy.walkAmount += (moving - enemy.walkAmount) * std::min(1.0f, deltaTime * 10.0f);
             const float closeX = camera.position.x - enemy.position.x;
             const float closeZ = camera.position.z - enemy.position.z;
-            if (damageCooldown <= 0.0f && closeX * closeX + closeZ * closeZ < 1.2f * 1.2f) {
+            if (damageCooldown <= 0.0f && closeX * closeX + closeZ * closeZ < 1.2f * 1.2f &&
+                (!level.hasPlatforming() || (camera.position.y - playerEyeHeight < enemy.position.y + enemy.size.y * 0.5f &&
+                 camera.position.y - playerEyeHeight + playerBodyHeight > enemy.position.y - enemy.size.y * 0.5f))) {
                 const int contactDamage = enemy.heavy ? 45 : 10;
                 playerHealth = std::max(0, playerHealth - contactDamage);
                 damageCooldown = 1.0f;
@@ -397,6 +433,11 @@ namespace {
         for (Projectile& projectile : projectiles) {
             projectile.position = projectile.position + projectile.velocity * deltaTime;
             projectile.lifetime -= deltaTime;
+            if (level.hasPlatforming() && level.bodyBlocked(projectile.position.x, projectile.position.z, 0.10f,
+                    projectile.position.y - 0.1f, projectile.position.y + 0.1f)) {
+                projectile.lifetime = 0.0f;
+                continue;
+            }
             const float dx = camera.position.x - projectile.position.x;
             const float dy = camera.position.y - projectile.position.y;
             const float dz = camera.position.z - projectile.position.z;
@@ -416,7 +457,7 @@ namespace {
                 [](const Projectile& projectile) { return projectile.lifetime <= 0.0f; }),
             projectiles.end());
 
-        if (level.reachedExit(camera.position.x, camera.position.z)) {
+        if (level.reachedExit(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight)) {
             if (currentLevelNumber == 1) {
                 std::string loadError;
                 if (!initialLevel.load(secondLevelFile, loadError)) {
@@ -431,8 +472,8 @@ namespace {
                 }
             } else {
                 gameWon = true;
-                std::cout << "Level 2 complete! Press T to restart.\n";
-                glfwSetWindowTitle(window, "LEVEL 2 COMPLETE - press T to restart");
+                std::cout << "Level complete! Press T to restart.\n";
+                glfwSetWindowTitle(window, "LEVEL COMPLETE - press T to restart");
             }
         }
     }
@@ -503,8 +544,8 @@ namespace {
                     if (!level.isSolid(column, row)) continue;
                     float distance = 0.0f;
                     if (ray_intersects_box(camera.position, direction,
-                            {level.worldX(column), 2.25f, level.worldZ(row)},
-                            {Level::kTileSize, 4.5f, Level::kTileSize}, range, distance)
+                            {level.worldX(column), level.ceilingHeight() * 0.5f, level.worldZ(row)},
+                            {Level::kTileSize, level.ceilingHeight(), Level::kTileSize}, range, distance)
                             && distance < nearestHit) {
                         nearestHit = distance;
                         rayEnds[rayIndex] = camera.position + direction * distance;
@@ -512,6 +553,16 @@ namespace {
                 }
             }
 
+            for (const Platform& p : level.platforms()) {
+                float distance = 0.0f;
+                if (ray_intersects_box(camera.position, direction,
+                        {level.worldX(p.column), (p.bottom + p.top) * 0.5f, level.worldZ(p.row)},
+                        {Level::kTileSize, p.top - p.bottom, Level::kTileSize}, range, distance) &&
+                    distance < nearestHit) {
+                    nearestHit = distance;
+                    rayEnds[rayIndex] = camera.position + direction * distance;
+                }
+            }
             for (std::size_t index = 0; index < enemies.size(); ++index) {
                 if (enemies[index].health <= 0) continue;
                 float hitDistance = 0.0f;
@@ -963,7 +1014,7 @@ namespace {
 static int run_game(int argc, char** argv) {
     const std::string levelFile = find_level(argc, argv);
     secondLevelFile = (std::filesystem::path(levelFile).parent_path() / "level2.json").string();
-    currentLevelNumber = std::filesystem::path(levelFile).stem() == "level2" ? 2 : 1;
+    currentLevelNumber = std::filesystem::path(levelFile).stem() == "test_arena" ? 1 : 2;
     std::string loadError;
     if (!initialLevel.load(levelFile, loadError)) {
         std::cerr << loadError << '\n';
@@ -1208,9 +1259,26 @@ static int run_game(int argc, char** argv) {
         // Teammates can replace the placeholder geometry and materials later.
         const float floorWidth = level.width() * Level::kTileSize;
         const float floorDepth = level.height() * Level::kTileSize;
-        draw_box(program, vao, {0.0f, -0.25f, 0.0f},
-                 {floorWidth, 0.5f, floorDepth}, {0.17f, 0.09f, 0.08f});
-        draw_box(program, vao, {0.0f, 4.75f, 0.0f},
+        if (!level.hasLava()) {
+            draw_box(program, vao, {0.0f, -0.25f, 0.0f},
+                     {floorWidth, 0.5f, floorDepth}, {0.17f, 0.09f, 0.08f});
+        } else {
+            // Merge consecutive equal floor tiles by row to avoid excessive draw calls.
+            for (int row = 0; row < level.height(); ++row) {
+                for (int start = 0; start < level.width();) {
+                    const bool floor = level.hasFloor(start,row);
+                    int end = start + 1;
+                    while (end < level.width() && level.hasFloor(end,row) == floor) ++end;
+                    const Vec3 center{(level.worldX(start) + level.worldX(end - 1)) * 0.5f,
+                                      floor ? -0.25f : -1.55f, level.worldZ(row)};
+                    const Vec3 size{(end-start)*Level::kTileSize, 0.5f, Level::kTileSize};
+                    if (floor) draw_box(program,vao,center,size,{0.17f,0.09f,0.08f});
+                    else draw_model_box(program,vao,model_matrix(center,size),{0.80f,0.14f,0.015f},3);
+                    start = end;
+                }
+            }
+        }
+        draw_box(program, vao, {0.0f, level.ceilingHeight() + 0.25f, 0.0f},
                  {floorWidth, 0.5f, floorDepth}, {0.1f, 0.07f, 0.12f});
 
         for (int row = 0; row < level.height(); ++row) {
@@ -1219,20 +1287,33 @@ static int run_game(int argc, char** argv) {
                 const float x = level.worldX(column);
                 const float z = level.worldZ(row);
                 if (level.isSolid(column, row)) {
-                    if (tile == 'D') draw_door_model(program, vao, {x, 2.25f, z});
-                    else draw_box(program, vao, {x, 2.25f, z},
-                                  {Level::kTileSize, 4.5f, Level::kTileSize}, {0.30f, 0.08f, 0.09f});
+                    if (tile == 'D' && level.ceilingHeight() == 4.5f) draw_door_model(program, vao, {x, 2.25f, z});
+                    else draw_box(program, vao, {x, level.ceilingHeight() * 0.5f, z},
+                                  {Level::kTileSize, level.ceilingHeight(), Level::kTileSize},
+                                  tile == 'D' ? Vec3{0.48f,0.35f,0.09f} : Vec3{0.30f,0.08f,0.09f});
                 }
                 const float time = static_cast<float>(now);
+                const float y = level.surfaceAt(column,row);
                 if (tile == 'H' && !level.isHealthCollected(column, row))
-                    draw_medkit_model(program, vao, {x, 0.50f, z}, time);
+                    draw_medkit_model(program, vao, {x, y + 0.50f, z}, time);
                 if (tile == 'S' && !level.isShotgunCollected(column, row))
-                    draw_shotgun_pickup(program, vao, {x, 0.52f, z}, time);
+                    draw_shotgun_pickup(program, vao, {x, y + 0.52f, z}, time);
                 if (tile == 'X') {
-                    draw_box(program, vao, {x, 0.04f, z},
+                    draw_box(program, vao, {x, y + 0.04f, z},
                              {1.4f, 0.08f, 1.4f}, {0.09f, 0.65f, 0.5f});
                 }
             }
+        }
+
+        for (const Platform& p : level.platforms()) {
+            const float x = level.worldX(p.column), z = level.worldZ(p.row);
+            const float thickness = p.top - p.bottom;
+            draw_model_box(program,vao,model_matrix({x,(p.bottom + p.top)*0.5f,z},
+                {Level::kTileSize,thickness,Level::kTileSize}),{0.24f,0.31f,0.36f},1);
+            // Recessed stripes on the top surface, kept within the collision bounds.
+            for (int line = -1; line <= 1; line += 2)
+                draw_model_box(program,vao,model_matrix({x + line*0.82f,p.top-0.008f,z},
+                    {0.10f,0.02f,1.9f}),{0.78f,0.47f,0.11f},3);
         }
 
         for (const Enemy& enemy : enemies) {

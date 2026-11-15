@@ -37,11 +37,14 @@ You can also start the game from the build directory because CMake copies the te
 | --- | --- |
 | WASD | Move and slide against walls |
 | Mouse | Look around |
-| Space | Jump |
+| Space | Jump / double jump |
 | Left click | Shoot (ray hit test blocked by walls and closed doors) |
 | E | Toggle nearby door |
 | F | Toggle flashlight |
-| R | Restart test level |
+| R | Reload |
+| T | Restart level |
+| Ctrl | Slide |
+| 1 / 2 | Switch weapons |
 | Esc | Exit |
 
 The simple enemies move directly toward you when close enough. This is intentionally **not** full AI.
@@ -83,6 +86,8 @@ Symbols:
 - `M` — simple enemy spawn
 - `H` — health pickup
 - `X` — exit (exactly one)
+- `S` — shotgun pickup; `F` — flying enemy; `B` — heavy enemy
+- `~` — lava pit (no floor; falling into it kills the player)
 
 All rows must have the same length. Tiles are 2×2 world units.
 The game validates levels in C++ when loading them (including exit reachability).
@@ -102,6 +107,28 @@ macOS / Linux:
 Add more file paths to validate multiple levels. It exits with a nonzero status
 for invalid files, making it useful in automated build checks.
 No Python installation is required.
+
+## Platforming
+
+Try the included Inferno Escape sample:
+
+```bash
+./build/doom_opengl assets/levels/platforming.json
+```
+
+Windows: ` .\\build\\Release\\doom_opengl.exe assets/levels/platforming.json ` (remove the surrounding spaces).
+
+The optional `ceilingHeight` is in world units (4.5–32, default 4.5).
+The optional `platforms` array contains objects like
+`{"column":4,"row":3,"bottom":0.4,"top":0.7}`.
+Coordinates are zero-based, each footprint is one 2×2 tile. Set bottom to 0
+for a solid raised block, or above 0 for a floating platform. Paint lava
+under gaps. One platform per tile; a spawn, pickup, enemy or exit on a
+platform uses its top as the entity's base height. Older maps still load.
+The editor's reachability hint is approximate; the native validator checks
+shape and non-wall connectivity, not whether each possible jump is feasible.
+Playtest exported levels. Custom maps launched explicitly finish at their own exit.
+Run `ctest --test-dir build -C Release --output-on-failure` for collision tests.
 
 ## Graphics already present
 
