@@ -57,8 +57,12 @@ The simple enemies move directly toward you when close enough. This is intention
 
 Press Esc to pause the game. The settings menu can be operated with the
 mouse or arrow keys and Enter. F11 toggles desktop fullscreen. Window size
-presets: 960×540, 1280×720, 1600×900, 1920×1080, 2560×1440. Fullscreen uses the
-primary monitor's current desktop video mode. Render resolution is independent:
+presets: 960×540, 1280×720, 1600×900, 1920×1080, 2560×1440. On macOS, F11
+and the in-game display mode use native AppKit fullscreen, matching the green
+title-bar button (and Control-Command-F). The menu detects OS fullscreen
+changes automatically and waits for the transition to finish. Windows/Linux
+use GLFW monitor fullscreen. Windowed dimensions are read from the OS;
+fullscreen exit restores the windowed geometry. Render resolution is independent:
 180p (original retro), 360p, 540p, 720p, 1080p, or Native (framebuffer).
 The renderer preserves the window aspect ratio, including HiDPI displays.
 VSync and sound can be toggled, and the current level can be restarted or

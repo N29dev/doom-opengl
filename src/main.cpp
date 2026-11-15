@@ -10,6 +10,7 @@
 #include <vector>
 #include "Level.hpp"
 #include "Audio.hpp"
+#include "NativeWindow.hpp"
 
 namespace {
     struct Vec3 {
@@ -123,7 +124,9 @@ namespace {
 
     struct DisplaySettings {
         bool fullscreen = false;
+        bool fullscreenTransition = false;
         int windowPreset = 1;
+        int windowWidth = 1280, windowHeight = 720;
         int renderPreset = 0;
         bool vsync = true;
         bool paused = false;
@@ -294,7 +297,7 @@ namespace {
     void fire_weapon();
 
     void mouse_callback(GLFWwindow*, double x, double y) {
-        if (settings.paused) return;
+        if (settings.paused || settings.fullscreenTransition) return;
         if (firstMouse) {
             mouseX = x;
             mouseY = y;
@@ -312,22 +315,70 @@ namespace {
         mouseY = y;
     }
 
+    bool actual_fullscreen(GLFWwindow* window) {
+#ifdef __APPLE__
+        return native_window::fullscreen(window);
+#else
+        return glfwGetWindowMonitor(window)!=nullptr;
+#endif
+    }
+
+    void sync_window_mode(GLFWwindow* window) {
+        const bool actual=actual_fullscreen(window);
+#ifdef __APPLE__
+        const bool transitioning=native_window::transitioning();
+#else
+        const bool transitioning=false;
+#endif
+        if (actual!=settings.fullscreen || transitioning!=settings.fullscreenTransition) {
+            settings.fullscreen=actual;
+            settings.fullscreenTransition=transitioning;
+            firstMouse=true;
+            pendingScroll=0;
+            // Allow Cocoa to complete its Spaces animation without a captured mouse.
+            glfwSetInputMode(window,GLFW_CURSOR,(settings.paused||transitioning)?GLFW_CURSOR_NORMAL:GLFW_CURSOR_DISABLED);
+            if(!transitioning)glfwSwapInterval(settings.vsync?1:0);
+        }
+        // Only store true windowed geometry, never transient fullscreen dimensions.
+        if(!actual&&!transitioning&&!glfwGetWindowAttrib(window,GLFW_ICONIFIED)&&
+           !glfwGetWindowAttrib(window,GLFW_MAXIMIZED)) {
+            int w=0,h=0;
+            glfwGetWindowSize(window,&w,&h);
+            if(w>0&&h>0) {
+                settings.windowWidth=w;settings.windowHeight=h;
+                glfwGetWindowPos(window,&settings.windowX,&settings.windowY);
+                int best=0;
+                double bestDistance=1e30;
+                for(int i=0;i<static_cast<int>(windowSizes.size());++i) {
+                    const double dx=w-windowSizes[i][0],dy=h-windowSizes[i][1];
+                    const double distance=dx*dx+dy*dy;
+                    if(distance<bestDistance){bestDistance=distance;best=i;}
+                }
+                settings.windowPreset=best;
+            }
+        }
+    }
+
     void update_window_mode(GLFWwindow* window, bool fullscreen) {
-        if (fullscreen == settings.fullscreen) return;
-        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-        if (!monitor) return;
-        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-        if (!mode) return;
+        sync_window_mode(window);
+        if (settings.fullscreenTransition || fullscreen == settings.fullscreen) return;
+#ifdef __APPLE__
+        // Use the same AppKit Spaces transition as the green title-bar button.
+        // Do not mix it with glfwSetWindowMonitor on this platform.
+        if(native_window::requestFullscreen(window,fullscreen)) sync_window_mode(window);
+#else
         if (fullscreen) {
-            glfwGetWindowPos(window,&settings.windowX,&settings.windowY);
-            settings.fullscreen = true;
+            GLFWmonitor* monitor=glfwGetPrimaryMonitor();
+            if(!monitor)return;
+            const GLFWvidmode* mode=glfwGetVideoMode(monitor);
+            if(!mode)return;
             glfwSetWindowMonitor(window,monitor,0,0,mode->width,mode->height,mode->refreshRate);
         } else {
-            settings.fullscreen = false;
-            const auto size=windowSizes[settings.windowPreset];
-            glfwSetWindowMonitor(window,nullptr,settings.windowX,settings.windowY,size[0],size[1],GLFW_DONT_CARE);
+            glfwSetWindowMonitor(window,nullptr,settings.windowX,settings.windowY,
+                                 settings.windowWidth,settings.windowHeight,GLFW_DONT_CARE);
         }
-        glfwSwapInterval(settings.vsync?1:0);
+        sync_window_mode(window);
+#endif
         firstMouse=true;
     }
 
@@ -335,7 +386,7 @@ namespace {
         settings.paused=paused;
         settings.mx=settings.my=-1;
         pendingScroll=0;
-        glfwSetInputMode(window,GLFW_CURSOR,paused?GLFW_CURSOR_NORMAL:GLFW_CURSOR_DISABLED);
+        glfwSetInputMode(window,GLFW_CURSOR,(paused||settings.fullscreenTransition)?GLFW_CURSOR_NORMAL:GLFW_CURSOR_DISABLED);
         firstMouse=true;
         if (!paused) {
             previousFirePressed=glfwGetMouseButton(window,GLFW_MOUSE_BUTTON_LEFT)==GLFW_PRESS;
@@ -355,9 +406,10 @@ namespace {
             case 0: if(activate) set_paused(window,false); break;
             case 1: update_window_mode(window,!settings.fullscreen); break;
             case 2:
-                if(!settings.fullscreen) {
+                if(!settings.fullscreen&&!settings.fullscreenTransition) {
                     settings.windowPreset=(settings.windowPreset+direction+static_cast<int>(windowSizes.size()))%static_cast<int>(windowSizes.size());
                     const auto size=windowSizes[settings.windowPreset];
+                    if(glfwGetWindowAttrib(window,GLFW_MAXIMIZED))glfwRestoreWindow(window);
                     glfwSetWindowSize(window,size[0],size[1]);
                 }
                 break;
@@ -373,6 +425,7 @@ namespace {
 
     // Returns true whenever gameplay should be frozen for this frame.
     bool settings_input(GLFWwindow* window) {
+        sync_window_mode(window);
         static std::array<bool,7> held{};
         constexpr std::array<int,7> keys{{GLFW_KEY_ESCAPE,GLFW_KEY_F11,GLFW_KEY_UP,GLFW_KEY_DOWN,GLFW_KEY_LEFT,GLFW_KEY_RIGHT,GLFW_KEY_ENTER}};
         std::array<bool,7> pressed{};
@@ -383,7 +436,8 @@ namespace {
         static bool clickHeld=false;
         const bool clickDown=glfwGetMouseButton(window,GLFW_MOUSE_BUTTON_LEFT)==GLFW_PRESS;
         const bool click=clickDown&&!clickHeld;clickHeld=clickDown;
-        if(pressed[1]) update_window_mode(window,!settings.fullscreen);
+        if(settings.fullscreenTransition) return true;
+        if(pressed[1]) { update_window_mode(window,!settings.fullscreen); if(settings.fullscreenTransition) return true; }
         if(pressed[0]) {
             set_paused(window,!settings.paused);
             return true;
@@ -1378,14 +1432,13 @@ void main() { color = vec4(ray_color, 1.0); }
         hud.rectangle(0,0,2.0f,2.0f,{0.045f,0.042f,0.052f});
         hud.text(0,0.89f,"PAUSED",amber,1.75f,true);
         hud.text(0,0.68f,"SETTINGS",dim,1.0f,true);
-        const auto size=windowSizes[settings.windowPreset];
         const std::array<std::string,menuRows> labels{{"RESUME","DISPLAY MODE","WINDOW SIZE","RENDER RES","VSYNC","SOUND","RESTART LEVEL","QUIT GAME"}};
-        const std::array<std::string,menuRows> values{{"",settings.fullscreen?"FULLSCREEN":"WINDOWED",
-            settings.fullscreen?"DESKTOP":std::to_string(size[0])+"X"+std::to_string(size[1]),
+        const std::array<std::string,menuRows> values{{"",settings.fullscreenTransition?"SWITCHING":settings.fullscreen?"FULLSCREEN":"WINDOWED",
+            settings.fullscreen?"DESKTOP":std::to_string(settings.windowWidth)+"X"+std::to_string(settings.windowHeight),
             renderNames[settings.renderPreset],settings.vsync?"ON":"OFF",audio::muted()?"OFF":"ON","",""}};
         for(int i=0;i<menuRows;++i) {
             const float y=menu_row_y(i);
-            const bool selected=i==settings.row,disabled=i==2&&settings.fullscreen;
+            const bool selected=i==settings.row,disabled=settings.fullscreenTransition||(i==2&&settings.fullscreen);
             hud.rectangle(0,y,1.56f,0.149f,selected?Vec3{0.40f,0.27f,0.14f}:Vec3{0.11f,0.115f,0.14f});
             hud.rectangle(0,y,1.53f,0.129f,selected?Vec3{0.20f,0.145f,0.10f}:Vec3{0.085f,0.09f,0.11f});
             hud.text(-0.71f,y+0.038f,labels[i],disabled?dim:selected?amber:white,0.95f);
@@ -1617,6 +1670,10 @@ static int run_game(int argc, char** argv) {
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+#ifdef __APPLE__
+    native_window::observe(window);
+#endif
+    sync_window_mode(window);
     if (!audio::initialize()) std::cerr << "Audio device unavailable; continuing silently.\n";
     double previous = glfwGetTime();
     float weaponBobPhase = 0.0f;
@@ -1809,6 +1866,9 @@ static int run_game(int argc, char** argv) {
     }
 
     audio::shutdown();
+#ifdef __APPLE__
+    native_window::unobserve();
+#endif
     glDeleteRenderbuffers(1, &pixelDepth);
     glDeleteTextures(1, &pixelColor);
     glDeleteFramebuffers(1, &pixelFbo);

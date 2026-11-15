@@ -62,6 +62,14 @@ target_link_libraries(level_core PUBLIC nlohmann_json::nlohmann_json)
 
 add_executable(doom_opengl src/main.cpp)
 target_link_libraries(doom_opengl PRIVATE glfw doom_glad OpenGL::GL level_core doom_audio)
+if(APPLE)
+    enable_language(OBJCXX)
+    set_target_properties(doom_opengl PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    target_sources(doom_opengl PRIVATE src/NativeWindow.mm)
+    set_source_files_properties(src/NativeWindow.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    find_library(APPKIT_FRAMEWORK AppKit REQUIRED)
+    target_link_libraries(doom_opengl PRIVATE ${APPKIT_FRAMEWORK})
+endif()
 
 # Standalone command-line tool; no OpenGL window or Python needed.
 add_executable(level_validator tools/validate_levels.cpp)
