@@ -31,22 +31,55 @@ FetchContent_Declare(
 	GIT_SHALLOW TRUE
 )
 
+# Avoid fetching repository history for the header-only JSON dependency.
+# Official release archive is about 111 KB, with its published SHA-256.
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "Skip remote dependency updates")
+set(FETCHCONTENT_QUIET OFF CACHE BOOL "Show dependency download progress")
 FetchContent_Declare(
-	json
-	GIT_REPOSITORY https://github.com/nlohmann/json.git
-	GIT_TAG v3.11.3
-	GIT_SHALLOW TRUE
+    json
+    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+    URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d
+    TIMEOUT 120
+    TLS_VERIFY ON
 )
+message(STATUS "Preparing GLFW 3.4...")
+FetchContent_MakeAvailable(glfw)
+message(STATUS "Preparing JSON 3.11.3...")
+FetchContent_MakeAvailable(json)
 
-# Native audio playback; no Python or runtime asset pack.
-FetchContent_Declare(
-    miniaudio
-    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
-    GIT_TAG 0.11.21
-    GIT_SHALLOW TRUE
-    SOURCE_SUBDIR unused-cmake-directory
-)
-FetchContent_MakeAvailable(glfw json miniaudio)
+# Native audio only needs one header, not the entire miniaudio repository.
+# Pin the exact commit previously used by the 0.11.21 tag.
+message(STATUS "Preparing miniaudio 0.11.21...")
+if(FETCHCONTENT_SOURCE_DIR_MINIAUDIO)
+    set(miniaudio_SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_MINIAUDIO}")
+elseif(EXISTS "${FETCHCONTENT_BASE_DIR}/miniaudio-src/miniaudio.h")
+    # Reuse the 0.11.21 checkout from previous builds.
+    set(miniaudio_SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/miniaudio-src")
+else()
+    set(miniaudio_SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/miniaudio-0.11.21")
+    set(audio_header "${miniaudio_SOURCE_DIR}/miniaudio.h")
+    if(NOT EXISTS "${audio_header}")
+        file(MAKE_DIRECTORY "${miniaudio_SOURCE_DIR}")
+        file(DOWNLOAD
+            https://raw.githubusercontent.com/mackron/miniaudio/4a5b74bef029b3592c54b6048650ee5f972c1a48/miniaudio.h
+            "${audio_header}.part"
+            TLS_VERIFY ON TIMEOUT 120 INACTIVITY_TIMEOUT 30
+            SHOW_PROGRESS STATUS audio_download)
+        list(GET audio_download 0 audio_status)
+        if(NOT audio_status EQUAL 0)
+            file(REMOVE "${audio_header}.part")
+            message(FATAL_ERROR "miniaudio download failed: ${audio_download}. Retry CMake or set FETCHCONTENT_SOURCE_DIR_MINIAUDIO.")
+        endif()
+        file(RENAME "${audio_header}.part" "${audio_header}")
+    endif()
+endif()
+if(NOT EXISTS "${miniaudio_SOURCE_DIR}/miniaudio.h")
+    message(FATAL_ERROR "miniaudio.h is missing from ${miniaudio_SOURCE_DIR}")
+endif()
+message(STATUS "Dependencies ready.")
 find_package(Threads REQUIRED)
 add_library(doom_audio STATIC src/Audio.cpp src/miniaudio_impl.c)
 target_include_directories(doom_audio PRIVATE "${miniaudio_SOURCE_DIR}")

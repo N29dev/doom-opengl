@@ -8,7 +8,8 @@ This is a mechanics *foundation*, not a complete game or final levels.
 - CMake 3.20+ and a C/C++17 toolchain (MSVC, Clang, or GCC)
 - OpenGL 3.3 Core support
 - Git and network access for the first CMake configuration:
-  GLFW 3.4 and nlohmann/json 3.11.3 are fetched automatically.
+  GLFW 3.4, nlohmann/json 3.11.3 and miniaudio 0.11.21 are fetched automatically.
+  The JSON release archive and miniaudio header are downloaded directly and reused on subsequent configurations.
 - GLAD is compiled from GLFW's pre-generated OpenGL 3.3 bindings. Python is not required to configure, build, or run.
 
 ## Build
