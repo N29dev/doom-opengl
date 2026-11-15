@@ -13,7 +13,7 @@ constexpr unsigned sampleRate = 44100;
 constexpr float tau = 6.28318530718f;
 using Samples = std::vector<float>;
 std::array<Samples, static_cast<std::size_t>(Sound::Count)> bank;
-struct Voice { const Samples* sound = nullptr; std::size_t offset = 0; float gain = 1.0f; };
+struct Voice { const Samples* sound = nullptr; std::size_t offset = 0; float left = 1.0f, right = 1.0f; };
 std::array<Voice, 16> voices{};
 std::mutex mutex;
 ma_device device{};
@@ -40,17 +40,21 @@ void generate(Sound which, float seconds, float low, float high, float noiseAmou
 }
 void callback(ma_device*, void* output, const void*, ma_uint32 frames) {
     auto* out = static_cast<float*>(output);
-    std::fill_n(out, frames, 0.0f);
+    std::fill_n(out, static_cast<std::size_t>(frames)*2, 0.0f);
     std::lock_guard<std::mutex> lock(mutex);
     if (silent) return;
     for (auto& v : voices) {
         if (!v.sound) continue;
         const auto count=std::min(static_cast<std::size_t>(frames),v.sound->size()-v.offset);
-        for (std::size_t i=0;i<count;++i) out[i]+=(*v.sound)[v.offset+i]*v.gain;
+        for (std::size_t i=0;i<count;++i) {
+            const float sample = (*v.sound)[v.offset+i];
+            out[2*i] += sample*v.left;
+            out[2*i+1] += sample*v.right;
+        }
         v.offset += count;
         if (v.offset==v.sound->size()) v={};
     }
-    for (ma_uint32 i=0;i<frames;++i) out[i]=std::clamp(out[i],-0.9f,0.9f);
+    for (std::size_t i=0;i<static_cast<std::size_t>(frames)*2;++i) out[i]=std::clamp(out[i],-0.9f,0.9f);
 }
 }
 bool initialize() {
@@ -74,9 +78,22 @@ bool initialize() {
     generate(Sound::Locked,.23f,140,100,.12f,2,.30f,true);
     generate(Sound::Clear,.48f,380,700,.04f,1.5f,.30f,false,true);
     generate(Sound::Finish,.85f,330,660,.02f,1.3f,.34f,false,true);
+    // Distinct monster voices: rough growls, high-pitched flying screeches and low mechanical rumbles.
+    generate(Sound::DemonGrowl,.65f,105,68,.42f,1.5f,.44f,true);
+    generate(Sound::DemonAttack,.30f,170,62,.59f,2.5f,.57f,true);
+    generate(Sound::DemonPain,.24f,260,110,.35f,2.8f,.49f);
+    generate(Sound::DemonDeath,.75f,155,28,.53f,2.1f,.62f,true);
+    generate(Sound::FlyHiss,.46f,580,310,.65f,1.6f,.31f,true);
+    generate(Sound::FlyPain,.20f,920,290,.26f,3.5f,.38f);
+    generate(Sound::FlyDeath,.63f,720,48,.46f,2.5f,.46f,true);
+    generate(Sound::HeavyGrowl,.87f,61,38,.34f,1.2f,.53f,true);
+    generate(Sound::HeavyAttack,.46f,90,24,.75f,3.0f,.75f);
+    generate(Sound::HeavyPain,.31f,104,56,.68f,3.2f,.57f,true);
+    generate(Sound::HeavyDeath,1.02f,83,19,.65f,2.0f,.76f,true);
+    generate(Sound::HeavyStep,.22f,64,25,.52f,5.5f,.48f);
     auto config = ma_device_config_init(ma_device_type_playback);
     config.playback.format=ma_format_f32;
-    config.playback.channels=1;
+    config.playback.channels=2;
     config.sampleRate=sampleRate;
     config.dataCallback=callback;
     if (ma_device_init(nullptr,&config,&device)!=MA_SUCCESS) return false;
@@ -84,7 +101,7 @@ bool initialize() {
     ready=true;
     return true;
 }
-void play(Sound sound,float gain) {
+void play(Sound sound,float gain,float pan) {
     if (!ready) return;
     std::lock_guard<std::mutex> lock(mutex);
     if (silent) return;
@@ -92,7 +109,10 @@ void play(Sound sound,float gain) {
     if (slot==voices.end()) slot=std::min_element(voices.begin(),voices.end(),[](const Voice& a,const Voice& b){
         return a.sound->size()-a.offset < b.sound->size()-b.offset;
     });
-    *slot={&bank[static_cast<std::size_t>(sound)],0,std::clamp(gain,0.0f,1.0f)};
+    const float volume=std::clamp(gain,0.0f,1.0f);
+    pan=std::clamp(pan,-1.0f,1.0f);
+    *slot={&bank[static_cast<std::size_t>(sound)],0,
+           volume*std::sqrt(0.5f*(1.0f-pan)),volume*std::sqrt(0.5f*(1.0f+pan))};
 }
 void toggleMute() {
     std::lock_guard<std::mutex> lock(mutex);

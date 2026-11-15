@@ -160,6 +160,9 @@ namespace {
         float walkPhase = 0.0f;
         float walkAmount = 0.0f;
         float flightBase = 0.0f;
+        float vocalTimer = 1.0f;
+        float footstepDistance = 0.0f;
+        float painSoundCooldown = 0.0f;
     };
 
     struct Projectile {
@@ -181,12 +184,26 @@ namespace {
     int pendingScroll = 0;
     bool exitWasTouched = false, exitWasUnlocked = false;
     float exitNotice = 0.0f, stepDistance = 0.0f, weaponSwitchTimer = 0.0f;
+    float weaponPickupNotice = 0.0f, weaponLockedNotice = 0.0f;
 
     int enemies_remaining() {
         return static_cast<int>(std::count_if(enemies.begin(), enemies.end(), [](const Enemy& e) { return e.health > 0; }));
     }
+    // Environmental sounds are positioned at their source when triggered.
+    void play_enemy_sound(audio::Sound sound, const Enemy& enemy, float gain = 1.0f) {
+        const Vec3 delta = enemy.position - camera.position;
+        const float distance = std::sqrt(dot(delta,delta));
+        if (distance >= 28.0f) return;
+        const Vec3 front = camera.front();
+        const Vec3 right = normalize(cross({front.x,0.0f,front.z},{0.0f,1.0f,0.0f}));
+        const float horizontal = std::sqrt(delta.x*delta.x+delta.z*delta.z);
+        const float pan = horizontal > 0.001f ? std::clamp(dot(delta,right)/horizontal,-0.9f,0.9f) : 0.0f;
+        const float fade = std::clamp(1.0f-distance/28.0f,0.0f,1.0f);
+        audio::play(sound,gain*fade/(1.0f+0.035f*distance),pan);
+    }
     void select_weapon(int weapon) {
-        if (weapon == selectedWeapon || (weapon == 2 && !shotgunUnlocked)) return;
+        if (weapon == 2 && !shotgunUnlocked) { weaponLockedNotice = 1.25f; return; }
+        if (weapon == selectedWeapon) return;
         reloadTimer = 0.0f;
         reloadingWeapon = 0;
         shotFlashTimer = 0.0f;
@@ -214,7 +231,11 @@ namespace {
             enemies.push_back({ {level.worldX(pos.column), level.surfaceAt(pos.column, pos.row) + 1.5f, level.worldZ(pos.row)},
                                 {1.8f, 3.0f, 1.8f}, 1000, false, true, 0.0f });
         }
-        for (auto& enemy : enemies) if (enemy.flying) enemy.flightBase = enemy.position.y;
+        for (std::size_t i=0;i<enemies.size();++i) {
+            auto& enemy=enemies[i];
+            if (enemy.flying) enemy.flightBase=enemy.position.y;
+            enemy.vocalTimer=0.8f+static_cast<float>(i%5)*0.81f;
+        }
         camera.position = {level.spawnX(), level.spawnFloor() + playerEyeHeight, level.spawnZ()};
         camera.yaw = 0.0f;
         camera.pitch = 0.0f;
@@ -236,6 +257,7 @@ namespace {
         exitWasTouched = false;
         exitWasUnlocked = enemies.empty();
         exitNotice = stepDistance = weaponSwitchTimer = 0.0f;
+        weaponPickupNotice = weaponLockedNotice = 0.0f;
         pendingScroll = 0;
         previousSpacePressed = false;
         previousFirePressed = false;
@@ -281,6 +303,8 @@ namespace {
         if (playerHealth <= 0 || gameWon) { pendingScroll = 0; return; }
         weaponSwitchTimer = std::max(0.0f, weaponSwitchTimer - deltaTime);
         exitNotice = std::max(0.0f, exitNotice - deltaTime);
+        weaponPickupNotice = std::max(0.0f, weaponPickupNotice - deltaTime);
+        weaponLockedNotice = std::max(0.0f, weaponLockedNotice - deltaTime);
 
         if (reloadTimer > 0.0f) {
             reloadTimer = std::max(0.0f, reloadTimer - deltaTime);
@@ -407,6 +431,8 @@ namespace {
 
         if (level.collectNearbyShotgun(camera.position.x, camera.position.z, camera.position.y - playerEyeHeight)) {
             shotgunUnlocked = true;
+            weaponPickupNotice = 4.5f;
+            weaponLockedNotice = 0.0f;
             select_weapon(2);
             audio::play(audio::Sound::Pickup);
             std::cout << "Picked up shotgun. Press 1/2, Q, or scroll to switch.\n";
@@ -427,6 +453,13 @@ namespace {
             const float dx = camera.position.x - enemy.position.x;
             const float dz = camera.position.z - enemy.position.z;
             const float distance = std::sqrt(dx * dx + dz * dz);
+            enemy.painSoundCooldown = std::max(0.0f,enemy.painSoundCooldown-deltaTime);
+            enemy.vocalTimer -= deltaTime;
+            if (distance < 17.0f && enemy.vocalTimer <= 0.0f) {
+                play_enemy_sound(enemy.flying?audio::Sound::FlyHiss:enemy.heavy?audio::Sound::HeavyGrowl:audio::Sound::DemonGrowl,enemy,0.75f);
+                // Stagger the calls so nearby monsters do not all growl in sync.
+                enemy.vocalTimer=3.5f+1.7f*(0.5f+0.5f*std::sin(enemy.position.x*2.7f+enemy.position.z*0.9f+static_cast<float>(glfwGetTime())));
+            }
             if (enemy.flying) {
                 enemy.projectileCooldown -= deltaTime;
                 const float targetY = enemy.flightBase + std::sin(static_cast<float>(glfwGetTime()) + enemy.position.x) * 0.35f;
@@ -441,7 +474,7 @@ namespace {
                 if (enemy.projectileCooldown <= 0.0f && distance < 24.0f) {
                     projectiles.push_back({enemy.position, normalize(camera.position - enemy.position) * 8.0f, 6.0f});
                     enemy.projectileCooldown = 2.0f;
-                    audio::play(audio::Sound::EnemyFire, std::clamp(1.0f - distance/27.0f,0.15f,0.8f));
+                    play_enemy_sound(audio::Sound::EnemyFire,enemy,0.9f);
                 }
                 continue;
             }
@@ -463,6 +496,13 @@ namespace {
             const Vec3 moved = enemy.position - beforeMove;
             const float travel = std::sqrt(dot(moved, moved));
             enemy.walkPhase += travel * (enemy.heavy ? 4.5f : 8.0f);
+            if (enemy.heavy) {
+                enemy.footstepDistance += travel;
+                if (enemy.footstepDistance >= 0.75f) {
+                    enemy.footstepDistance -= 0.75f;
+                    play_enemy_sound(audio::Sound::HeavyStep,enemy,0.8f);
+                }
+            }
             const float moving = travel > 0.0001f ? 1.0f : 0.0f;
             enemy.walkAmount += (moving - enemy.walkAmount) * std::min(1.0f, deltaTime * 10.0f);
             const float closeX = camera.position.x - enemy.position.x;
@@ -470,6 +510,7 @@ namespace {
             if (damageCooldown <= 0.0f && closeX * closeX + closeZ * closeZ < 1.2f * 1.2f &&
                 (!level.hasPlatforming() || (camera.position.y - playerEyeHeight < enemy.position.y + enemy.size.y * 0.5f &&
                  camera.position.y - playerEyeHeight + playerBodyHeight > enemy.position.y - enemy.size.y * 0.5f))) {
+                play_enemy_sound(enemy.heavy?audio::Sound::HeavyAttack:audio::Sound::DemonAttack,enemy);
                 const int contactDamage = enemy.heavy ? 45 : 10;
                 playerHealth = std::max(0, playerHealth - contactDamage);
                 damageCooldown = 1.0f;
@@ -608,7 +649,8 @@ namespace {
                 normalize(front + right * 0.06f + up * 0.08f), front}
             : std::array<Vec3, 5>{front, front, front, front, front};
 
-        bool hitAny = false, killedAny = false;
+        bool hitAny = false;
+        std::vector<bool> hitEnemies(enemies.size(),false);
         for (std::size_t rayIndex = 0; rayIndex < directions.size(); ++rayIndex) {
             const Vec3 direction = directions[rayIndex];
             rayEnds[rayIndex] = camera.position + direction * range;
@@ -656,15 +698,23 @@ namespace {
                 const int damage = selectedWeapon == 2
                     ? static_cast<int>(12.0f + 43.0f * distanceFactor) : 34;
                 hitAny = true;
+                hitEnemies[static_cast<std::size_t>(hitEnemy)] = true;
                 enemies[hitEnemy].health = std::max(0, enemies[hitEnemy].health - damage);
-                if (enemies[hitEnemy].health == 0) {
-                    killedAny = true;
-                    std::cout << "Enemy eliminated.\n";
-                }
+                if (enemies[hitEnemy].health == 0) std::cout << "Enemy eliminated.\n";
             }
         }
-        if (killedAny) audio::play(audio::Sound::Kill);
-        else if (hitAny) audio::play(audio::Sound::Hit);
+        // One monster vocal per hit enemy, rather than one per shotgun pellet.
+        for (std::size_t i=0;i<enemies.size();++i) {
+            if (!hitEnemies[i]) continue;
+            Enemy& enemy=enemies[i];
+            if (enemy.health == 0) {
+                play_enemy_sound(enemy.flying?audio::Sound::FlyDeath:enemy.heavy?audio::Sound::HeavyDeath:audio::Sound::DemonDeath,enemy);
+            } else if (enemy.painSoundCooldown <= 0.0f) {
+                play_enemy_sound(enemy.flying?audio::Sound::FlyPain:enemy.heavy?audio::Sound::HeavyPain:audio::Sound::DemonPain,enemy,0.9f);
+                enemy.painSoundCooldown=0.25f;
+            }
+        }
+        if (hitAny) audio::play(audio::Sound::Hit,0.24f);
     }
 
     GLuint compile_shader(GLenum type, const char* source) {
@@ -1143,25 +1193,44 @@ void main() { color = vec4(ray_color, 1.0); }
         hud.rectangle(0.0f, 0.0f, 0.035f, 0.008f, { 1.0f, 0.86f, 0.62f });
         hud.rectangle(0.0f, 0.0f, 0.008f, 0.035f, { 1.0f, 0.86f, 0.62f });
 
-        const int currentAmmo = selectedWeapon == 2 ? shotgunAmmo : pistolAmmo;
-        const int magazineSize = selectedWeapon == 2 ? 2 : 10;
         hud.text(-0.92f,-0.70f,"HP "+std::to_string(playerHealth),white);
-        hud.text(0.52f,-0.61f,selectedWeapon==2?"2 SHOTGUN":"1 PISTOL",white,1.0f,true);
-        hud.text(0.52f,-0.91f,std::to_string(currentAmmo)+"/"+std::to_string(magazineSize),white,1.0f,true);
-        const Vec3 ammoColor = selectedWeapon == 2
-            ? Vec3{0.95f, 0.55f, 0.12f} : Vec3{0.65f, 0.75f, 0.85f};
-        hud.rectangle(0.52f, -0.84f, 0.43f, 0.10f, {0.06f, 0.06f, 0.08f});
-        for (int bullet = 0; bullet < magazineSize; ++bullet) {
-            const float x = 0.335f + bullet * (0.36f / magazineSize);
-            hud.rectangle(x, -0.84f, 0.025f, 0.055f,
-                          bullet < currentAmmo ? ammoColor : Vec3{0.16f, 0.16f, 0.18f});
+
+        // Both weapon slots stay visible. Active slot gets an amber outline; locked is dim.
+        const Vec3 muted{0.50f,0.52f,0.56f}, panel{0.07f,0.08f,0.10f};
+        for (int weapon=1;weapon<=2;++weapon) {
+            const float x=weapon==1?0.13f:0.68f;
+            const bool unlocked=weapon==1 || shotgunUnlocked;
+            const bool active=selectedWeapon==weapon;
+            const Vec3 edge=active?amber:unlocked?Vec3{0.31f,0.35f,0.40f}:Vec3{0.20f,0.21f,0.25f};
+            hud.rectangle(x,-0.745f,0.52f,0.34f,edge);
+            hud.rectangle(x,-0.745f,0.495f,0.307f,panel);
+            hud.text(x,-0.60f,weapon==1?"1 PISTOL":"2 SHOTGUN",active?amber:unlocked?white:muted,1.0f,true);
+            const Vec3 iconColor=unlocked?Vec3{0.62f,0.67f,0.73f}:Vec3{0.27f,0.29f,0.32f};
+            if (weapon==1) {
+                hud.rectangle(x,-0.725f,0.16f,0.028f,iconColor);
+                hud.rectangle(x-0.048f,-0.752f,0.034f,0.055f,iconColor);
+            } else {
+                hud.rectangle(x+0.028f,-0.727f,0.22f,0.025f,iconColor);
+                hud.rectangle(x-0.10f,-0.745f,0.075f,0.035f,unlocked?Vec3{0.55f,0.33f,0.15f}:iconColor);
+            }
+            const std::string ammo=weapon==1?std::to_string(pistolAmmo)+"/10":std::to_string(shotgunAmmo)+"/2";
+            hud.text(x,-0.80f,unlocked?ammo:"LOCKED",unlocked?white:muted,1.0f,true);
+            if (active) {
+                hud.rectangle(x,-0.895f,0.48f,0.025f,{0.14f,0.12f,0.09f});
+                const float ratio=reloadTimer>0.0f?1.0f-reloadTimer/reloadDuration:1.0f;
+                if(ratio>0.0f)hud.rectangle(x-0.24f*(1.0f-ratio),-0.895f,0.48f*ratio,0.025f,amber);
+            }
         }
-        if (reloadTimer > 0.0f) {
-            const float reloadProgress = 1.0f - reloadTimer / reloadDuration;
-            hud.rectangle(0.52f, -0.75f, 0.43f, 0.025f, {0.12f, 0.08f, 0.03f});
-            hud.rectangle(0.52f - 0.43f * (1.0f - reloadProgress) * 0.5f,
-                          -0.75f, 0.43f * reloadProgress, 0.025f,
-                          {1.0f, 0.68f, 0.12f});
+        hud.text(0.405f,-0.93f,shotgunUnlocked?"Q / SCROLL TO SWAP":"FIND THE SHOTGUN",muted,1.0f,true);
+        if (playerHealth>0 && !gameWon && exitNotice<=0.0f) {
+            if (weaponPickupNotice>0.0f) {
+                hud.rectangle(0,-0.34f,1.45f,0.24f,panel);
+                hud.text(0,-0.24f,"SHOTGUN UNLOCKED",amber,1.0f,true);
+                hud.text(0,-0.35f,"1 / 2 OR Q / SCROLL",white,1.0f,true);
+            } else if (weaponLockedNotice>0.0f) {
+                hud.rectangle(0,-0.34f,1.30f,0.14f,panel);
+                hud.text(0,-0.30f,"FIND THE SHOTGUN FIRST",muted,1.0f,true);
+            }
         }
 
         glEnable(GL_DEPTH_TEST);

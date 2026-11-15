@@ -150,7 +150,7 @@ Run `ctest --test-dir build -C Release --output-on-failure` for collision tests.
 
 ## Audio
 
-Original retro sound effects are synthesized at startup and played by miniaudio 0.11.21 (fetched at configuration). No external audio files or Python are required. If audio initialization fails, gameplay continues silently. M toggles sound.
+Original retro sound effects are synthesized at startup and played by miniaudio 0.11.21 (fetched at configuration). No external audio files or Python are required. If audio initialization fails, gameplay continues silently. M toggles sound. Each enemy type has its own growl or hiss, pain and death sound; heavy enemies have footsteps, melee enemies have attack cues, and flyers use a projectile cue. Enemy sounds use distance attenuation and stereo panning at trigger time. Both weapon slots stay visible in the HUD, including the locked shotgun, with keybinds and ammo.
 
 ## Graphics already present
 
