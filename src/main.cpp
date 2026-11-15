@@ -135,7 +135,7 @@ namespace {
     constexpr std::array<int,6> renderHeights{{180,360,540,720,1080,0}};
     constexpr std::array<const char*,6> renderNames{{"RETRO 180P","360P","540P","720P","1080P","NATIVE"}};
     constexpr int menuRows = 8;
-    float menu_row_y(int row) { return 0.43f - static_cast<float>(row)*0.19f; }
+    float menu_row_y(int row) { return 0.39f - static_cast<float>(row)*0.165f; }
 
     bool firstMouse = true;
     bool flashlightEnabled = false;
@@ -398,7 +398,7 @@ namespace {
             const float ny=static_cast<float>(1-2*y/h);
             if(std::abs(nx)<=0.78f)
                 for(int i=0;i<menuRows;++i)
-                    if(std::abs(ny-menu_row_y(i))<0.085f) hovered=i;
+                    if(std::abs(ny-menu_row_y(i))<0.077f) hovered=i;
         }
         if(hovered>=0&&(std::abs(x-settings.mx)>0.5||std::abs(y-settings.my)>0.5)) settings.row=hovered;
         settings.mx=x;settings.my=y;
@@ -1386,10 +1386,10 @@ void main() { color = vec4(ray_color, 1.0); }
         for(int i=0;i<menuRows;++i) {
             const float y=menu_row_y(i);
             const bool selected=i==settings.row,disabled=i==2&&settings.fullscreen;
-            hud.rectangle(0,y,1.56f,0.165f,selected?Vec3{0.40f,0.27f,0.14f}:Vec3{0.11f,0.115f,0.14f});
-            hud.rectangle(0,y,1.53f,0.145f,selected?Vec3{0.20f,0.145f,0.10f}:Vec3{0.085f,0.09f,0.11f});
-            hud.text(-0.71f,y+0.047f,labels[i],disabled?dim:selected?amber:white,0.95f);
-            if(!values[i].empty())hud.text(0.40f,y+0.047f,values[i],disabled?dim:amber,0.9f,true);
+            hud.rectangle(0,y,1.56f,0.149f,selected?Vec3{0.40f,0.27f,0.14f}:Vec3{0.11f,0.115f,0.14f});
+            hud.rectangle(0,y,1.53f,0.129f,selected?Vec3{0.20f,0.145f,0.10f}:Vec3{0.085f,0.09f,0.11f});
+            hud.text(-0.71f,y+0.038f,labels[i],disabled?dim:selected?amber:white,0.95f);
+            if(!values[i].empty())hud.text(0.40f,y+0.038f,values[i],disabled?dim:amber,0.9f,true);
         }
         hud.text(0,-0.91f,"ESC RESUME / ARROWS / ENTER / CLICK",dim,0.75f,true);
         hud.text(0,0.56f,std::to_string(pixelWidth)+"X"+std::to_string(pixelHeight)+" INTERNAL",dim,0.75f,true);
